@@ -1,4 +1,5 @@
 ## This script models canopy lichen functional traits
+options(stringsAsFactors=F)
 
 working_dir = 'C:/Users/jrcoyle/Documents/UNC/Projects/Canopy Functional Traits/'
 sql_dir = 'C:/Users/jrcoyle/Documents/UNC/Projects/Canopy Functional Traits/Data/SQLite Tables/'
@@ -361,8 +362,6 @@ for(i in use_traits){
 	box()
 }
 dev.off()
-
-
 
 
 
@@ -923,8 +922,80 @@ dev.off()
 
 
 ################################################################
-### Using Stan
+### Linear Models of Trait Variation at sample scale (trait diversity)
+library(reshape) #melt
 
+# Make a data frame of data for modeling
+use_traits = c('Water_capacity','Thallus_thickness','STA','Cortex_thickness','Rhizine_length','Tot_chl_DW','Chla2b')
+model_data = use_data[,c(use_traits, env_vars, 'Genus','SampID')]
+
+# DONT DO THIS YET
+# Transform responses
+# Effectively we'll be fitting log-normal models since all responses are constrained to be positive
+# Cortex thickness can be 0 so we add 1
+#model_data$Cortex_thickness = model_data$Cortex_thickness + 1
+#for(y in use_traits) model_data[,y] = log(model_data[,y])
+
+# Re-scale predictors
+model_data$Light_mean = model_data$Light_mean/10000
+model_data$Temp_max = model_data$Temp_max/10
+
+
+## Calculate metrics of single trait dispersion for each sample
+samps = unique(model_data$SampID)
+cft_disp = array(NA, dim=c(length(samps),7,2), dimnames=list(SampID=samps, Trait=use_traits, Metric = c('cv','mpd')))
+for(i in use_traits){
+	cft_disp[,i,'cv'] = tapply(model_data[,i], model_data$SampID, function(x) sqrt(var(x, na.rm=T))/mean(x, na.rm=T))
+	cft_disp[,i,'mpd'] = tapply(model_data[,i], model_data$SampID, function(x) mean(dist(x[!is.na(x)])))
+}
+
+# Bootstrap null distribution for trait dispersion
+N=10000
+cft_disp_null = array(NA, dim=c(length(samps),7,2,N), dimnames=list(SampID=samps, Trait=use_traits, Metric= c('cv','mpd'), 1:N))
+
+for(i in use_traits){
+	NAinds = which(is.na(model_data[,i]))
+	x = model_data[-NAinds, i]
+	fact = model_data[-NAinds, 'SampID']
+	
+	for(j in 1:N){
+		use_order = sample(fact)
+		cv = tapply(x, use_order, function(y) sqrt(var(y, na.rm=T))/mean(y, na.rm=T))
+		mpd = tapply(x, use_order, function(y) mean(dist(y[!is.na(y)])))
+	
+		cft_disp_null[names(cv),i,'cv',j] = cv
+		cft_disp_null[names(mpd),i,'mpd',j] = mpd
+	}
+}	
+
+
+# Calculate z-scores for actual trait dispersions based on null distribution
+null_mean = apply(cft_disp_null, c(1,2,3), mean)
+null_sd = apply(cft_disp_null, c(1,2,3), function(x) sqrt(var(x)))
+
+cft_disp_z = (cft_disp - null_mean)/null_sd
+
+plot(cft_disp_z[,'Water_capacity','mpd']~ env[paste('S',samps, sep=''),'Vpd_mean'])
+plot(cft_disp_z[,'Cortex_thickness','mpd']~ env[paste('S',samps, sep=''),'Light_mean'])
+plot(cft_disp_z[,'STA','mpd']~ env[paste('S',samps, sep=''),'Vpd_mean'])
+
+cft_disp_df = melt(cft_disp)
+cft_disp_df$z = melt(cft_disp_z)[,'value']
+
+cft_disp_df = merge(cft_disp_df, unique(model_data[,c('SampID',env_vars)]))
+
+pdf('./Analysis/Figures/FT mpd vs env.pdf', height=9, width=9)
+par(mfrow=c(length(use_traits), length(env_vars)))
+par(mar=c(4,4,1,1))
+for(i in use_traits){
+for(j in env_vars){
+
+	this_data = subset(cft_disp_df, Trait==i&Metric=='mpd')
+	plot(z~this_data[,j], data=this_data, xlab=j, ylab=i)
+	abline(h=c(-2,2))
+
+}}
+dev.off()
 
 
 #################################################################
