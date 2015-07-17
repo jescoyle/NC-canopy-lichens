@@ -76,7 +76,7 @@ mtexti <- function(text, side, off = 0.25,
 
 
 ## A function that calculate unique taxa from a sample when samples may contain genera
-# x = a vextor of TaxonIDs
+# x = a vector of TaxonIDs
 # taxa = a dataframe with a column for TaxonID and TaxonConcept ('species','genus','unknown')
 
 
@@ -95,5 +95,38 @@ calc_unique_taxa = function(x, taxa){
 	new_species
 }
 
+## A function that attempts to assing a species name to thalli only IDed to genus based on an additional list of taxa found in the sample
+# x = a vector of TaxonIDs to be checked
+# others = a vector of other TaxonIDs known to exist in the sample
+# taxa = a dataframe with a column for TaxonID and TaxonConcept ('species','genus','unknown') 
+
+resolve_genera = function(x, others, taxa){
+	
+	x = calc_unique_taxa(x, taxa)
+
+	rownames(taxa) = taxa$TaxonID
+	these_taxa = taxa[x,]
+
+	genera = subset(these_taxa, TaxonConcept=='genus')$Genus
+
+	if(length(genera)>0){
+		other_taxa = taxa[others,]
+		other_species = subset(other_taxa, TaxonConcept=='species')
+		
+		# Go through each genus	
+		for(g in genera){
+			potential_species = subset(other_species, Genus==g)
+			
+			# Only replace the unidentified thallus if there is only one other potential species it could be	
+			if(nrow(potential_species)==1){
+				which_x = which(taxa[x,'Genus']==g) # Find the TaxonID to replace
+				x[which_x] = potential_species$TaxonID
+			}
+		}
+	} 
+
+	# Return the modified TaxonID list
+	x	
+}
 
 
