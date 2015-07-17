@@ -80,6 +80,8 @@ hist(loggers$Temp)
 weather_df = read.table('./Data/Weather_stations/NOAA_NCDC_NC-Durham-11W_subhourly.txt', header=T)
 weather_wdf = read.table('./Data/Weather_stations/Person_County_Airport_NCDC_Surface_Data_Hourly_Global_edited.txt',
 	header=F, sep=',', skip=2, na.strings=c('','999','9999.9','999.9'))
+weather_kor = read.csv('./Data/Weather_stations/Korstian/Korstian-High-TRH.csv')
+
 
 wdf_header1 = read.table('./Data/Weather_stations/Person_County_Airport_NCDC_Surface_Data_Hourly_Global_edited.txt', nrows=1)
 wdf_header2 = read.table('./Data/Weather_stations/Person_County_Airport_NCDC_Surface_Data_Hourly_Global_edited.txt', nrows=1, skip=1)
@@ -101,13 +103,15 @@ names(weather_wdf) = wdf_header
 # Add initial 0 to time column when time before 10am
 weather_df$UTC_TIME = gsub(' ', 0, format(weather_df$UTC_TIME, width=4))
 weather_wdf$HrMn = gsub(' ', 0, format(weather_wdf$HrMn, width=4))
-
+weather_kor$datetime_utc = as.POSIXlt(weather_kor$Time, tz='UTC', format='%m/%d/%Y %H:%M')
+weather_kor$datetime_utc = weather_kor$datetime_utc + weather_kor$Time_zone*(60*60)
 weather_df$datetime = strptime(paste(weather_df$UTC_DATE, weather_df$UTC_TIME), format='%Y%m%d %H%M', tz='UTC')
 weather_wdf$datetime = strptime(paste(weather_wdf$Date, weather_wdf$HrMn), format='%Y%m%d %H%M', tz='UTC')
 
 # Add a unique identifier for each row
 weather_df$weather_row = 1:nrow(weather_df)
 weather_wdf$weather_row = 1:nrow(weather_wdf)
+weather_kor$weather_row = 1:nrow(weather_kor)
 
 # A function that finds the closest time
 nearest_time = function(x, timelist){
@@ -132,6 +136,7 @@ keep_cols = c('WIND_Spd','WIND_Spd_Q','DEWPT_Dewpt','DEWPT_Q','SLP_Slp','SLP_Q',
 # Merge and save
 log_wdf = merge(log_wdf, weather_wdf[,c('weather_row',keep_cols)], by='weather_row', all.x=T)
 write.csv(log_wdf, './Data/Derived Tables/logger&weather_data_wdf.csv', row.names=F)
+log_wdf = read.csv('./Data/Derived Tables/logger&weather_data_wdf.csv')
 
 # Merge 2014-2015 records with Duke Forest data
 log_df = subset(loggers, SampID > 18)
@@ -148,6 +153,25 @@ keep_cols = c('AIR_TEMPERATURE','PRECIPITATION','SOLAR_RADIATION','SR_FLAG','REL
 # Merge and save
 log_df = merge(log_df, weather_df[,c('weather_row',keep_cols)], by='weather_row', all.x=T)
 write.csv(log_df, './Data/Derived Tables/logger&weather_data_df.csv', row.names=F)
+log_df = read.csv('./Data/Derived Tables/logger&weather_data_df.csv')
+
+# Merge 2014-2015 records with Brenna's Korstian Division HOBO logger data
+log_kor = subset(loggers, SampID > 18)
+weather_row = c()
+for(i in 1:nrow(log_kor)){
+	weather_row = c(weather_row, nearest_time(log_kor$datetimes[i], weather_kor$datetime_utc))
+	if(i %% 100 == 0) print(i)
+}
+log_kor$weather_row = weather_row
+
+# Define columns in weather station data to merge into logger data
+keep_cols = c('RH','Temp_C')
+
+# Merge and save
+log_kor = merge(log_kor, weather_kor[,c('weather_row',keep_cols)], by='weather_row', all.x=T)
+write.csv(log_kor, './Data/Derived Tables/logger&weather_data_kor.csv', row.names=F)
+log_kor = read.csv('./Data/Derived Tables/logger&weather_data_kor.csv')
+# This doesn't actually work because the last date sampled for the Korstian Dataloggers is 2/14/2015
 
 ## Calculate VPD based on weather station humidity and data logger temp
 
@@ -160,12 +184,12 @@ calc_vpd = function(temp, dewpt=NA, rh=NA, rh_temp=NA){
 	vp_canopysat = 6.11*(10^((7.5*temp)/(237.3+temp)))
 	
 	# If dewpoint temperature is given, calculate the actual vapor pressure in the air at the weather station
-	if(is.na(rh)){
+	if(is.na(rh)[1]){
 		vp_act = 6.11*(10^((7.5*dewpt)/(237.3+dewpt)))
 	}
 
 	# If relative humidity is given, calculate
-	if(is.na(dewpt)){
+	if(is.na(dewpt)[1]){
 		vp_sat = 6.11*(10^((7.5*rh_temp)/(237.3+rh_temp)))
 		vp_act = vp_sat*(rh/100)
 	}
@@ -188,10 +212,40 @@ log_wdf[log_wdf$DEWPT_Dewpt==999.9,'DEWPT_Dewpt'] = NA
 # Calculate
 log_df$vpd = calc_vpd(temp=log_df$Temp, rh=log_df$RELATIVE_HUMIDITY, rh_temp=log_df$AIR_TEMPERATURE)
 log_wdf$vpd = calc_vpd(temp=log_wdf$Temp, dewpt=log_wdf$DEWPT_Dewpt)
+log_kor$vpd = calc_vpd(temp=log_kor$Temp, rh=log_kor$RH, rh_temp = log_kor$Temp_C)
 
 # Save data
 write.csv(log_df, './Data/Derived Tables/logger&weather_data_df.csv', row.names=F)
 write.csv(log_wdf, './Data/Derived Tables/logger&weather_data_wdf.csv', row.names=F)
+write.csv(log_kor, './Data/Derived Tables/logger&weather_data_kor.csv', row.names=F)
+
+
+# Compre vpd calculated using Duke Forest weather station vs. Korstian Data Logger
+names(log_kor)[13] = 'vpd_kor'
+names(log_df)[17] = 'vpd_df'
+log_kor$ID = paste(log_kor$SampID, log_kor$datetimes)
+log_df$ID = paste(log_df$SampID, log_df$datetimes)
+comp_wd = merge(log_kor[,c('SampID','datetimes','Temp','RH','Temp_C','vpd_kor', 'ID')], log_df[,c('ID','AIR_TEMPERATURE','RELATIVE_HUMIDITY','vpd_df')])
+
+cutoff = which((comp_wd$datetimes > weather_kor[nrow(weather_kor),'datetime_utc']))
+comp_wd = comp_wd[-cutoff,]
+
+pdf('./Data/Weather_stations/compare_vpd_korstian-duke_forest.pdf', height=11, width=8)
+par(mfrow=c(6,3))
+par(mar=c(4,4,1,1))
+for(i in 19:72){
+	plot(vpd_df~vpd_kor, data=subset(comp_wd, SampID==i))
+	abline(0,1, col=2, lwd=2)
+	mtext(paste('Sample', i), 3, -1)
+}
+dev.off()
+
+plot(AIR_TEMPERATURE~Temp_C, data=comp_wd, xlab='Korstian Temp', ylab='Duke Forest Temp')
+abline(0,1, col=2, lwd=2)
+plot(RELATIVE_HUMIDITY~RH, data=comp_wd, xlab='Korstian RH', ylab='Duke Forest RH')
+abline(0,1, col=2, lwd=2)
+
+
 
 # Make a dataframe with just environmental variables to be analyzed
 keep_cols = c('Index','SampID','Temp','Lux','vpd','Time_zone','Date','Time','datetimes','times')
