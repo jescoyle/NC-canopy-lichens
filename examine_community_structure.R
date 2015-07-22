@@ -5,6 +5,7 @@
 
 working_dir = 'C:/Users/jrcoyle/Documents/UNC/Projects/Canopy Functional Traits/'
 sql_dir = 'C:/Users/jrcoyle/Documents/UNC/Projects/Canopy Functional Traits/Data/SQLite Tables/'
+data_dir = 'C:/Users/jrcoyle/Documents/UNC/Projects/Canopy Functional Traits/Data/Derived Tables/'
 
 setwd(working_dir)
 options(stringsAsFactors=F)
@@ -16,13 +17,14 @@ thalli = read.csv(paste(sql_dir, 'derived_traits.csv', sep=''))
 samples = read.csv(paste(sql_dir, 'samples.csv', sep=''))
 lichen_taxa = read.csv(paste(sql_dir, 'taxa.csv', sep=''))
 trees = read.csv(paste(sql_dir, 'trees.csv', sep=''))
+env = read.csv(paste(data_dir, 'loggerdata.csv', sep=''), row.names=1)
 
 rownames(lichen_taxa) = lichen_taxa$TaxonID
 
 ########################################################################
 ### Taxonomic community composition
 
-# Remove thalli from samples on T10-T12
+# Remove thalli from samples on T11-T12
 use_samps = subset(samples, TreeID <=10)$SampID
 comm = subset(comm, SampID %in% use_samps)
 thalli = subset(thalli, SampID %in% use_samps)
@@ -45,7 +47,7 @@ taxa = taxa[lichen_taxa[taxa,'Lichenized']==1] # Remove all non-lichenized taxa
 taxa = taxa[order(taxa)] # Order alphabetically
 
 # Make taxa subsets for: only macrolichens, only foliose lichens, only crustose lichens
-taxa_macro = taxa[lichen_taxa[taxa,'Form'] %in% c('foliose','fruitcose')]
+taxa_macro = taxa[lichen_taxa[taxa,'Form'] %in% c('foliose','fruticose')]
 taxa_fol = taxa[lichen_taxa[taxa,'Form'] == 'foliose']
 taxa_crust = taxa[lichen_taxa[taxa,'Form'] == 'crustose']
 
@@ -124,51 +126,313 @@ save(sp_list, sampXsp, sampXsp_macro, sampXsp_crust, sampXsp_thalli, sampXsp_fol
 load('./Data/Derived Tables/sampXsp_matrices.RData')
 
 
+
+#########################################################################################
+### Ordination
+
+library(vegan)
+
+# Define predictors
+env_vars = c('Light_mean','Light_high','Temp_max','Vpd_mean','Vpd_daysatfreq')
+xvarnames = data.frame(var = env_vars)
+xvarnames = expression('Mean Light Intensity (Lux)', 'Freq. Full Sun', 
+	'Max. Temperature (C*degree)','Mean VPD','Freq. Daytime Saturated Air')
+names(xvarnames) = env_vars
+
+xvarnames_short = c('Mean Light','Full Sun Freq.','Max Temp.','Mean VPD','Sat. Air Freq.')
+names(xvarnames_short) = env_vars
+
+# Define positional predictors
+pos_vars = c('Height_top','Angle')
+
+# Define variables
+Y = sampXsp
+X = env[as.character(use_samps),env_vars]
+X = samples[as.character(use_samps), pos_vars]
+W = factor(samples[as.character(use_samps),'Year'])
+names(W) = use_samps
+
+# Remove species with no observed occurence in this data set
+Y = Y[,colSums(Y)>0]
+
+# Remove samples with no observed species
+Y = Y[rowSums(Y)>0,]
+
+# Make sure rows are in same order (i.e. from the same samples)
+X = X[rownames(Y),]
+W = W[rownames(Y)]
+
+
+# CCA - constrained ordination on pres-abs data preserving chi-sq distance
+ord1 = cca(Y~., data=X)
+anova(ord1) # Test significance of whole model
+anova(ord1, by='axis')
+anova(ord1, by='term')
+
+spscores = scores(ord1)$species
+spscores[order(spscores[,'CCA1']),]
+spscores[order(spscores[,'CCA2']),]
+
+plot(ord1, display='sites', type='n', las=1)
+points(ord1, display='sites', pch=1, col='black', bg='lightblue')
+text(ord1, display='bp',  lwd=2)#labels=xvarnames_short,
+points(ord1, display='species', pch=3, lwd=2)
+
+plot(ord1, display='sites', type='n', las=1)
+points(ord1, display='sites', pch=21, col='black', bg='lightblue')
+text(ord1, 'species', select=apply(spscores, 1, function(x) sqrt(x[1]^2 + x[2]^2))>1.5)
+text(ord1, display='bp', labels=c('Height','Angle'),  lwd=2, col=2)
+text(ord1, 'species', select=apply(spscores, 1, function(x) sqrt(x[1]^2 + x[2]^2))>1.5)
+
+# Partial RDA
+ord2 = cca(Y~.+Condition(W), data=X)
+anova(ord2)
+anova(ord2, by='axis')
+anova(ord2, by='term')
+
+spscores = scores(ord2)$species
+
+plot(ord2, display='sites', type='n', las=1)
+points(ord2, display='sites', pch=1, col='black', bg='lightblue')
+text(ord2, display='bp', labels=xvarnames_short, lwd=2)
+points(ord2, display='species', pch=3, lwd=2)
+
+plot(ord2, display='sites', type='n', las=1)
+points(ord2, display='sites', pch=1, col='black', bg='lightblue')
+text(ord2, 'species', select=apply(spscores, 1, function(x) sqrt(x[1]^2 + x[2]^2))>1.5)
+
+# Each variable separately
+
+ord1_byvar = lapply(env_vars, function(x) cca(Y~X[,x]))
+names(ord1_byvar) = env_vars
+
+lapply(ord1_byvar, anova)
+
+plot(ord1_byvar$Vpd_mean)
+
+
+#####################################################################################
+### Models of the distributions of individual species
+
+library(MASS)
+library(lm.beta)
+library(MuMIn)
+library(reshape2)
+
+## Determine which species to model based on frequency in data set
+spfreq = colSums(sampXsp_macro)
+spfreq[order(spfreq, decreasing=T)]
+
+# Focus on taxa occuring in at least 10% of samples, but exclude taxa not IDed to species
+focal_taxa = names(spfreq[spfreq>0.1*nrow(sampXsp_macro)])
+focal_taxa = focal_taxa[lichen_taxa[focal_taxa,'TaxonConcept']=='species']
+
+# Loop through species
+comm = sampXsp_macro
+Xdata = env[rownames(comm),env_vars]
+
+# Re-scale frequency data to be % observation
+Xdata$Light_high = Xdata$Light_high*100
+Xdata$Vpd_daysatfreq = Xdata$Vpd_daysatfreq*100
+
+# Re-scale light data to kilo-Lux
+Xdata$Light_mean = Xdata$Light_mean/1000
+
+# MAY WANT TO SCALE DATA, OR, CALCULATE STD COEFS AFTER?
+
+modlist = lapply(focal_taxa, function(i){
+	yvar  = cbind(comm[,i], 1-comm[,i])
+	mod = glm(yvar ~ ., data=Xdata, family=binomial(logit)) 	
+})
+names(modlist) = focal_taxa
+
+modlist_single = lapply(focal_taxa, function(i){
+	yvar  = cbind(comm[,i], 1-comm[,i])
+	this_modlist = lapply(env_vars, function(j){
+		xvar = Xdata[,j]
+		mod = glm(yvar ~ xvar, family=binomial(logit))
+	})
+	names(this_modlist) = env_vars
+	this_modlist	
+})
+names(modlist_single) = focal_taxa
+
+## Calculate array of coefficients, se, ci's
+modarray_single = array(NA, dim=list(length(focal_taxa), length(env_vars), 9),
+	dimnames=list(focal_taxa, env_vars, c('b0','b1','se','ci.up95','ci.low95','P','b1.std','AICc','Deviance'))
+)
+
+for(i in focal_taxa){
+for(j in env_vars){
+	this_mod = modlist_single[[i]][[j]]
+	this_coef = summary(this_mod)$coef
+
+	modarray_single[i,j,c('b0','b1')] = this_coef[,'Estimate']
+	modarray_single[i,j,'se'] = this_coef['xvar','Std. Error']
+	modarray_single[i,j,c('ci.low95','ci.up95')] = confint(this_mod, 'xvar', level=0.95)
+	modarray_single[i,j,'P'] = with(this_mod, pchisq(null.deviance-deviance, df=df.null-df.residual, lower.tail=F))
+	modarray_single[i,j,'b1.std'] = coef(lm.beta(this_mod))['xvar']
+	modarray_single[i,j,'AICc'] = AICc(this_mod)
+	modarray_single[i,j,'Deviance'] = deviance(this_mod)
+}}
+
+# Make a 2-D Table of models
+modmelt_single = melt(modarray_single, varnames=c('Taxon','Var','Parm'))
+modtable_single = dcast(modmelt_single, Taxon+Var~...)
+write.table(modtable_single, './Analysis/Figures/single species occurance prob models.txt',sep='\t', quote=F, row.names=F)
+
+# Order table from strongest to weakest effects
+modtable_single[order(modtable_single$b1.std, decreasing=T),]
+
+# Find significant models
+sigmods = subset(modtable_single, P <0.1)
+sigmods_df = sigmods[,c('b1','se','ci.low95','ci.up95')]
+sigmods_df = exp(sigmods_df)
+sigmods_df = cbind(sigmods_df, sigmods[,c('Taxon','P','Deviance')])
+sigmods_df$Predictor = xvarnames_short[sigmods$Var]
+sigmods_df$n.obs = spfreq[as.character(sigmods$Taxon)]
+sigmods_df = sigmods_df[,c('Taxon','Predictor','b1','se','ci.low95','ci.up95','P','Deviance','n.obs')]
+write.table(format(sigmods_df, digits=3, trim=T), './Analysis/Figures/single species occurance prob models significant.txt',sep='\t', quote=F, row.names=F)
+
+
+# Calculate odds ratios (odds of species occurance for every one unit increase in env variable)
+mod_odds = data.frame(exp(modarray_single[,,'b1']))
+format(mod_odds, scientific=F)
+
+
+## Show predicted distribution changes for env variables for all taxa
+mylty=c(1,2)
+mycol=c('black','grey50', 'grey80')
+
+for(j in env_vars){
+
+png(paste('./Analysis/Figures/species occurance prob vs ',j,'.png', sep=''), height=450, width=450)
+par(mar=c(4,4,1,1))
+Xrange = range(Xdata[,j])
+plot.new()
+plot.window(xlim=Xrange, ylim=c(0,1))
+
+for(i in focal_taxa){
+	modfunc = function(x) predict(modlist_single[[i]][[j]], data.frame(xvar=x), type='response')
+	
+	sig = cut(modarray_single[i,j,'P'], c(0,0.05,0.1,1))
+	slope = modarray_single[i,j,'b1']>0
+	use_col = mycol[sig]
+	use_lty = mylty[ifelse(as.numeric(sig)<3, 1, 2)]
+	curve(modfunc, from=Xrange[1], to=Xrange[2], add=T, lwd=2, col=use_col, lty=use_lty)
+	
+	if(as.numeric(sig) < 3 ) text(Xrange[2], modfunc(Xrange[2]), i, adj=c(1,ifelse(slope, -.25, 1.25)))
+}
+axis(1)
+axis(2, las=1)
+mtext(xvarnames[j], 1, 3)
+mtext('Occurance Probability', 2, 3)
+box()
+dev.off()
+
+}
+
 #########################################################################################
 ### Vertical abundance profiles for species and genera
+library(MASS)
 
 # Calculate distance from top of tree
 samples$Height_top = sapply(1:nrow(samples), function(i){
 	trees[trees$TreeID==samples[i,'TreeID'],'Height']-samples[i,'Height']
 }) 
 
-height_cat = c(0,10,15,20,25)
+height_cat = c(6,9,12,15,36)
 
 # Calculate relative abundance of each species in each height class
-height_bin = cut(samples[rownames(sampXsp),'Height'], height_cat)
+height_bin = cut(samples[use_samps,'Height_top'], height_cat)
 
-binXsp = aggregate(1:nrow(sampXsp), list(Height=height_bin), function(i){
-	these_samps = sampXsp[i,]
-	colSums(these_samps)/(nrow(these_samps)*24)*100
-})$x
-rownames(binXsp) = levels(height_bin)
+## Models of occurance using positional variables
+modlist_pos = lapply(focal_taxa, function(i){
+	yvar  = cbind(comm[,i], 1-comm[,i])
+	mod = glm(yvar ~ ., data=samples[rownames(comm),c('Height_top','Angle')], family=binomial(logit)) 	
+})
+names(modlist_pos) = focal_taxa
 
-height_bin = cut(samples[rownames(sampXgen),'Height'], height_cat)
-binXgen = aggregate(1:nrow(sampXgen), list(Height=height_bin), function(i){
-	these_samps = sampXgen[i,]
-	colSums(these_samps)/(nrow(these_samps)*24)*100
-})$x
-rownames(binXgen) = levels(height_bin) 
+lapply(modlist_pos, summary) # Really only height ever has an effect
 
-# Actually, rather than summing all samples makes more sense to treat each sample in a height bin as an observation in order to get error bars
-plot(
-
-
+heightvar = -1*samples[rownames(comm),'Height_top']
+modlist_height = lapply(focal_taxa, function(i){
+	yvar  = cbind(comm[,i], 1-comm[,i])
+	mod = glm(yvar ~ heightvar, family=binomial(logit)) 	
+})
+names(modlist_height) = focal_taxa
 
 
+# Plot vertical profiles
+mylty=c(1,2)
+mycol=c('black','grey50', 'grey80')
+
+Xrange = range(heightvar)
+xpoints = seq(Xrange[1],Xrange[2], length.out=100)
+
+svg('./Analysis/Figures/species height profiles num labels.svg', height=5, width=5)
+par(mar=c(4,4,1,1))
+plot.new()
+plot.window(xlim=c(0,1), ylim=Xrange)
+
+for(i in focal_taxa){
+	this_mod = modlist_height[[i]]
+
+	modfunc = function(x) predict(this_mod, data.frame(heightvar=x), type='response')
+
+	P = with(this_mod, pchisq(null.deviance-deviance, df.null-df.residual, lower.tail=F))
+	sig = cut(P, c(0,0.05, 0.1, 1))
+	
+	#slope = modarray_single[i,j,'b1']>0
+	use_col = mycol[sig]
+	use_lty = mylty[ifelse(as.numeric(sig)<3, 1, 2)]
+
+	lines(modfunc(xpoints), xpoints, lwd=2, col=use_col, lty=use_lty)
+
+	add_on = which(focal_taxa==i)*.1
+	
+	#if(as.numeric(sig) < 3 ) text(modfunc(Xrange[2]-add_on), Xrange[2]-add_on, i, adj=c(-.25,0))
+	if(as.numeric(sig) < 3 ) text(modfunc(Xrange[2]), Xrange[2], which(focal_taxa==i), adj=c(0.5,-0.25))
+
+
+}
+axis(1)
+axis(2, las=1, at=seq(-7,-15,-1), labels=7:15)
+mtext('Occurrence Probability', 1, 3)
+mtext('Distance from Canopy Top (m)', 2, 3)
+#box()
+dev.off() 
+
+# Of the species that change with height, both Pyx_sub and Pun_rud respond to an env variable (Vpd_mean)
+# Check whether height distribution change still exists when controlling for env
+comm = sampXsp_macro
+Xdata = env[rownames(comm),env_vars]
+
+yvar  = cbind(comm[,'Pyx_sub'], 1-comm[,'Pyx_sub'])
+pyx_mod = glm(yvar ~ Vpd_mean + heightvar, data=Xdata, family=binomial(logit)) 
+summary(pyx_mod)
+# height still has a significant effect even with vpd - probably because VPD is independent of height
+anova(pyx_mod, update(pyx_mod, .~.-heightvar), test='Chisq')
+
+yvar  = cbind(comm[,'Pun_rud'], 1-comm[,'Pun_rud'])
+pun_mod = glm(yvar ~ Vpd_daysatfreq + heightvar, data=Xdata, family=binomial(logit)) 
+summary(pun_mod)
+# height still has a significant effect even with vpd - probably because VPD is independent of height
+anova(pun_mod, update(pun_mod, .~.-heightvar), test='Chisq')
 
 
 
+## Plot env vars as a function of height
+par(mfrow=c(1,length(env_vars)))
+par(mar=c(4,4,0,0))
+for(i in env_vars){
+	plot(Xdata[,i], heightvar, ylab='', xlab=xvarnames[i], axes=F)
+	if(i==env_vars[1]) mtext('Distance from Canopy Top (m)', 2, 3)
+	axis(1)
+	axis(2,las=1, at=seq(-7,-15,-1), labels=7:15)
+}
 
-
-
-
-
-
-
-
-
-
+cor(heightvar, Xdata)
 
 
 
