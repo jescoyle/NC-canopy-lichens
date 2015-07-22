@@ -175,22 +175,27 @@ log_kor = read.csv('./Data/Derived Tables/logger&weather_data_kor.csv')
 
 ## Calculate VPD based on weather station humidity and data logger temp
 
-# A function to calculate vapor pressure deficit from temp and rh or dewpt 
-# based on: http://www.srh.noaa.gov/images/epz/wxcalc/vaporPressure.pdf
-# and on: http://en.wikipedia.org/wiki/Dew_point
+# A function to calculate vapor pressure deficit from temp and rh or dewpt
+# We do not use the slight correction for pressure
+# based on: Buck 1981, New Equations for Computing Vapor Pressure and Enhancement Factor
+# http://journals.ametsoc.org/doi/abs/10.1175/1520-0450%281981%29020%3C1527%3ANEFCVP%3E2.0.CO%3B2
+# these constants are recommended for -20 : 50 Celcius
 calc_vpd = function(temp, dewpt=NA, rh=NA, rh_temp=NA){
+	a = 6.1121
+	b = 17.502
+	c = 240.97
 
 	# Calculate the vapor pressure of saturated air in the canopy based on data logger temp
-	vp_canopysat = 6.11*(10^((7.5*temp)/(237.3+temp)))
+	vp_canopysat = a*exp((b*temp)/(c+temp))
 	
 	# If dewpoint temperature is given, calculate the actual vapor pressure in the air at the weather station
 	if(is.na(rh)[1]){
-		vp_act = 6.11*(10^((7.5*dewpt)/(237.3+dewpt)))
+		vp_act = a*exp((b*dewpt)/(c+dewpt))
 	}
 
 	# If relative humidity is given, calculate
 	if(is.na(dewpt)[1]){
-		vp_sat = 6.11*(10^((7.5*rh_temp)/(237.3+rh_temp)))
+		vp_sat = a*exp((b*rh_temp)/(c+rh_temp))
 		vp_act = vp_sat*(rh/100)
 	}
 
@@ -269,7 +274,11 @@ for(i in plotorder){
 }
 dev.off()
 
-
+###########################################################
+### Calculate summary data for samples
+options(stringsAsFactors=F)
+loggers_env = read.csv('./Data/Derived Tables/loggers_env.csv')
+loggers_env$datetimes = as.POSIXlt(loggers_env$datetimes, tz='Etc/GMT+5')
 
 ## Make array of logger data - puts in 0 for missing data
 
@@ -500,8 +509,7 @@ chart.Correlation(Vpd)
 
 # Make a data frame
 loggerdata = data.frame(SampID=1:72, Temp, Light, Vpd, nlightobs, nvpdobs, nlightobs_sum, nlightobs_win, nvpdobs_sum, nvpdobs_win)
-
-write.csv(loggerdata, './Data/Derived Tables/loggerdata.csv')
+write.csv(loggerdata, './Data/Derived Tables/loggerdata.csv', row.names=F)
 
 
 ############################################################################
