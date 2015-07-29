@@ -23,11 +23,16 @@ xvarnames$displayName = c('Mean Light Intensity (Lux)', 'Freq. Full Sun',
 	'Max. Temperature (C)','Mean VPD','Freq. Daytime Saturated Air')
 rownames(xvarnames) = xvarnames$var
 
+xvarnames = expression('Mean Light Intensity (Lux)', 'Freq. Full Sun', 
+	'Max. Temperature (C*degree)','Mean VPD','Freq. Daytime Saturated Air')
+names(xvarnames) = env_vars
+
+
 ######################################################
 ### Read in Data
 
 traits = read.csv(paste(sql_dir, 'derived_traits.csv', sep=''))
-env = read.csv(paste(data_dir, 'loggerdata.csv', sep=''), row.names=1)
+env = read.csv(paste(data_dir, 'loggerdata.csv', sep=''))
 samples = read.csv(paste(sql_dir, 'samples.csv', sep=''))
 
 taxa = read.csv(paste(sql_dir, 'taxa.csv', sep=''))
@@ -48,6 +53,10 @@ traits = subset(traits, is.na(TaxonID)|!(TaxonID %in% c('Fol','')))
 
 # Merge traits and env data
 use_data = merge(traits, env)
+
+# Remove thalli from samples on T11-T12
+use_samps = subset(samples, TreeID <=10)$SampID
+use_data = subset(use_data, SampID %in% use_samps)
 
 #####################################################
 ### Clean up trait data 
@@ -73,8 +82,6 @@ use_data = subset(use_data, ThallusID != 22)
 
 ## Boxplots of traits across genera
 
-use_traits = c('Water_capacity','STA','Tot_chl_DW','Chla2b','Rhizine_length')
-
 pdf('./Analysis/Figures/trait distributions by genus.pdf', height=5, width=6)
 par(mar=c(7,3,3,1))
 for(i in use_traits){
@@ -88,9 +95,40 @@ dev.off()
 use_data[use_data$ThallusID %in% c(419,501,521,541), 'STA'] = NA # Values abnormally high- area measured prob doesn't correspond to mass
 use_data[use_data$ThallusID==8, 'Water_capacity'] = NA # Can't have negative water capacity
 use_data[(use_data$Chla2b<0) & (!is.na(use_data$Chla2b)),'Chla2b'] = NA # Can't have negative ratios. Measurements probably erroneous
+use_data[use_data$Genus=='Usnea','Rhizine_length'] = NA # Usnea don't have rhizines
+
+# Remove fruticose thalli (for some analyses)
+use_data = subset(use_data, Genus!='Usnea')
+
+##########################################################################
+### Make a data frame of data for modeling
+
+use_traits = c('Water_capacity','Thallus_thickness','STA','Cortex_thickness','Rhizine_length','Tot_chl_DW','Chla2b')
+model_data = use_data[,c(use_traits, env_vars, 'Genus','SampID','Year')]
+
+# Transform responses
+# Effectively we'll be fitting log-normal models since all responses are constrained to be positive
+# Cortex thickness can be 0 so we add 1
+model_data$Cortex_thickness = model_data$Cortex_thickness + 1
+
+layout(matrix(1:(2*length(use_traits)), nrow=2, byrow=F))
+for(y in use_traits){
+	hist(model_data[,y], main=y)
+	hist(log(model_data[,y]), main=paste('log',y))
+}
+
+for(y in use_traits) model_data[,y] = log(model_data[,y])
+
+# Re-scale predictors
+model_data$Light_high = model_data$Light_high*100
+model_data$Vpd_daysatfreq = model_data$Vpd_daysatfreq*100
+model_data$Light_mean = model_data$Light_mean/1000
+#model_data$Temp_max = model_data$Temp_max/10
+#var(model_data[,env_vars])
+
 
 #####################################################
-### Distribution of Genera/Species across samples / environments
+### Distribution of Genera/Species across samples
 
 taxon_freq = table(use_data$TaxonID)
 taxon_freq[order(taxon_freq)]
@@ -115,38 +153,26 @@ write.csv(genus_tab, './Analysis/genus_frequency.csv', row.names=F)
 
 # Number of species in each genus
 taxon_tab = data.frame(taxon_freq); names(taxon_tab) = c('TaxonID','Thalli')
-merge(taxon_tab, unique(use_data[,c('Genus','TaxonID')]))
+taxon_tab = merge(taxon_tab, unique(use_data[,c('Genus','TaxonID')]))
 
+# Boxplots of traits for species within each genus
+use_g = names(which(table(taxon_tab$Genus)>1))
 
-## Plot taxonomic richness vs light and temp
+pdf('./Analysis/Figures/trait distributions by species.pdf', height=7, width=14)
+for(g in use_g){
+	this_data = subset(use_data, Genus==g)
 
-sampXsp = xtabs(~SampID+TaxonID, data=use_data)
-
-calc_rich = function(x, taxa){
-	these_taxa = taxa[names(x[x>0]),]
-	sp_gen = subset(these_taxa, TaxonConcept=='species')$Genus
-	gen = subset(these_taxa, TaxonConcept=='genus')$Genus
-	gen_nosp = setdiff(gen, sp_gen)
-
-	length(sp_gen)+length(gen_nosp)
+	par(mar=c(7,3,3,1))
+	par(mfrow=c(2,4))
+	for(i in use_traits){
+		bp = boxplot(this_data[,i]~this_data$TaxonID, las=2, main=traitnames[i,'displayName'])
+		text(1:length(bp$n), bp$stats[4,], bp$n, adj=c(-.25,-.25))
+	}
+	plot.new()
 }
-
-richness = apply(sampXsp, 1, function(x) calc_rich(x, taxa))
-richness = data.frame(richness); richness$SampID=rownames(richness)
-
-env = merge(env, richness)
-
-plot(richness~Light_mean_sum, data=env)
-plot(richness~Temp_mean_sum, data=env)
-
-mod_rich = glm(richness~Light_mean_sum, data=env, family=poisson)
-summary(mod_rich)
-
-pdf('./Analysis/Figures/species richness histogram.pdf', height=4, width=4)
-par(mar=c(4,4,1,1))
-plot(table(env$richness), las=1, ylab='Num. Samples', xlab='Num. Species', ylim=c(0,20), lwd=4, lend=1)
 dev.off()
 
+#########################################################
 ## Correlations among traits
 cor(model_data[,use_traits], use='pairwise.complete.obs')
 
@@ -161,7 +187,6 @@ mycol=rainbow(11)
 plot(traitord, type = "n")
 points(traitord, display = "sites", cex = 0.8, pch=1, col=mycol[factor(noNA_data$Genus)])
 text(traitord, display = "spec", cex=0.7, col="blue")
-
 
 
 ######################################################
@@ -207,10 +232,953 @@ dev.off()
 
 
 ######################################################
+### ANOVA of Individual Traits
+
+library(lme4)
+library(LMERConvenienceFunctions)
+library(DTK) # multiple comparison test for unequal variances
+
+## Test for trait differences across sites - definitely differences, but these may be due to environment
+trait_aov_site = sapply(use_traits, function(i){
+	mod = summary(aov(use_data[,i]~Year, data=use_data))[[1]]
+	data.frame(SS=mod[1,2], MS=mod[1,3], F=mod[1,4], P=mod[1,5], N=sum(mod[,1])+1)
+})
+trait_aov_site = t(trait_aov_site)
+trait_kw_site = sapply(use_traits, function(i){
+	kwt = kruskal.test(use_data[,i], factor(use_data$Year))
+	data.frame(Chi.sq=kwt$statistic, P=kwt$p.value)
+})
+trait_kw_site = t(trait_kw_site)
+
+### ANOVA of traits among genera - using raw trait values, not transformed traits used for modeling
+
+# Check trait variances within Genera - heterogeneous
+sapply(use_traits, function(x){
+	tapply(use_data[,x], use_data$Genus, var, na.rm=T)
+})
+# Check trait variances within Sites - heterogeneous
+sapply(use_traits, function(x){
+	tapply(use_data[,x], use_data$Year, var, na.rm=T)
+})
+
+
+# ANOVA among genera
+trait_aov_gen = sapply(use_traits, function(i){
+	mod = summary(aov(use_data[,i]~Genus, data=use_data))[[1]]
+	data.frame(SS=mod[1,2], MS=mod[1,3], F=mod[1,4], P=mod[1,5], N=sum(mod[,1])+1)
+})
+trait_aov_gen = t(trait_aov_gen)
+
+# Kruskal-Wallis H-test in case variances are not equal
+trait_kw = sapply(use_traits, function(i){
+	kwt = kruskal.test(use_data[,i], factor(use_data$Genus))
+	data.frame(Chi.sq=kwt$statistic, P=kwt$p.value)
+})
+trait_kw = t(trait_kw)
+
+cbind(trait_aov_gen, trait_kw)
+
+write.csv(cbind(trait_aov_gen, trait_kw), './Analysis/Figures/ANOVA and K-W test of traits by genus no Usnea.csv')
+
+# Compare trait means across Genera (T3- Dunnett modified Tukey-Kramer multiple comparisons test)
+DTK_tests = sapply(use_traits, function(x){
+	this_data = subset(use_data, !is.na(use_data[,x])) # remove missing values
+	keep_genera = names(which(table(this_data$Genus)>2)) # remove genera where variance can't be estimated
+	this_data = subset(this_data, Genus %in% keep_genera)
+	DTK = DTK.test(this_data[,x], this_data$Genus, a=0.05)
+	DTK[[2]]
+}, simplify=F)
+
+# Pair-wise tests (DTK)
+diff_pairs = sapply(use_traits, function(x){
+	names(which(apply(DTK_tests[[x]][,2:3], 1, prod)>0))
+})
+
+# Number of observations of each trait for each genus
+Nobs = sapply(rownames(traitnames), function(x){
+	tapply(use_data[,x], use_data$Genus, function(y) sum(!is.na(y)))
+})
+
+write.csv(Nobs, './Analysis/Figures/number of trait measures for each genus.csv')
+
+# NOT DONE YET:  Wilcox rank-sum test for differences among pairs in ordinal data
+diff_pairs_ord = sapply(rownames(subset(traitnames, mode=='O')), function(x){
+	WT = pairwise.wilcox.test(as.numeric(use_data[,x]), use_data$Genus, p.adjust.method='hochberg', exact=F)$p.value
+	apply(which(WT <0.05, arr.ind=T), 1, function(y) paste(rownames(WT)[y[1]],colnames(WT)[y[2]], sep='-'))
+})
+
+
+# Boxplots of trait variation across genera
+traitnames = traitnames[order(traitnames$type),]
+
+# Numeric traits
+pdf('./Analysis/Figures/trait distributions by genus boxplot.pdf', height=5, width=4)
+for( i in use_traits) {
+	
+	par(mar=c(8,5,1,3))
+	meds = tapply(use_data[,i], use_data$Genus, median, na.rm=T)
+	plotorder = names(meds)[order(meds)]
+	boxplot(use_data[,i]~factor(use_data$Genus, levels=plotorder), 
+		las=3, ylab=traitnames[i,'displayName'], 
+		lwd=1, pt.lwd=1, varwidth=T)
+	axis(4)
+
+	# Kruskal-Wallis Test
+	kwtest = kruskal.test(use_data[,i], factor(use_data$Genus))
+	chi2 = kwtest$statistic
+	pval = kwtest$p.value
+
+	usr = par('usr')
+	this_text = substitute(Chi^2==c~~P==p, list(c = format(chi2, digits=3), p = format(pval, scientific=T, digits=2)))
+	text(usr[1], usr[4], this_text, srt=90, adj=c(1.1,1.1))
+
+	# Find groups that are different
+	#this_diff = diff_pairs[[i]]
+	#pairs = sapply(strsplit(this_diff, '-'), function(x) c(which(plotorder==x[1]), which(plotorder==x[2])))
+	#pairs = apply(pairs, 2, function(x) x[order(x)])
+	#pairs = pairs[,order(pairs[1,], pairs[2,])]
+}
+dev.off()
+
+## Test trait differences just within Parmotrema
+parm_data = subset(use_data, Genus=='Parmotrema')
+
+trait_kw_parm = sapply(use_traits, function(i){
+	kwt = kruskal.test(parm_data[,i], factor(parm_data$TaxonID))
+	data.frame(Chi.sq=kwt$statistic, P=kwt$p.value)
+})
+trait_kw_parm = t(trait_kw_parm)
+
+
+# Compare trait means across Parmotrema species
+DTK_tests_parm = sapply(use_traits, function(x){
+	this_data = subset(parm_data, !is.na(parm_data[,x])) # remove missing values
+	keep_sp = names(which(table(this_data$TaxonID)>2)) # remove genera where variance can't be estimated
+	this_data = subset(this_data, TaxonID %in% keep_sp)
+	DTK = DTK.test(this_data[,x], this_data$TaxonID, a=0.05)
+	DTK[[2]]
+}, simplify=F)
+
+# Pair-wise tests (DTK)
+diff_pairs_parm = sapply(use_traits, function(x){
+	names(which(apply(DTK_tests_parm[[x]][,2:3], 1, prod)>0))
+})
+
+# Number of observations of each trait for each genus
+Nobs_parm = sapply(rownames(traitnames), function(x){
+	tapply(parm_data[,x], parm_data$TaxonID, function(y) sum(!is.na(y)))
+})
+
+# Save significant differences
+sink('./Analysis/Figures/pairwise trait differences among taxa.txt')
+writeLines('All Genera\n')
+diff_pairs
+writeLines('\nParmotrema Species\n')
+diff_pairs_parm
+sink()
+
+
+# OLD PLOTS WHICH I MAY RE-USE
+# Categorical traits
+cattraits = rownames(subset(traitnames, mode=='O'))
+for(i in cattraits){
+	counts = sapply(tapply(use_data[,i], use_data$Genus, function(y) as.numeric(table(y))), 
+		function(x) x)
+	rownames(counts) = levels(use_data[,i])
+	freqs = t(t(counts) / colSums(counts))
+	means = tapply(as.numeric(use_data[,i]), use_data$Genus, mean, na.rm=T)
+	plotorder = names(means)[order(means)]
+	
+	svg(paste('./Analysis/Figures/',i,' by Genus barplot.svg', sep=''), height=5, width=5)
+	par(mar=c(4,8,3,4))
+	use_col = colorRampPalette(mycol[2:9])(nrow(freqs))
+	barplot(freqs[,plotorder], horiz=T, las=1, col=use_col, xlab='',
+		width=log(colSums(counts)), main=traitnames[i, 'displayName'])
+	par(xpd=NA)
+
+	usr=par('usr')
+	legend(0.5, usr[4], rownames(freqs), fill=use_col, horiz=T,
+		xjust=.5, yjust=.5, bty='n')
+	par(xpd=F)
+	mtext('Proportion of Individuals', 1, 2.2)
+	
+	# Kruskal-Wallis One-way ANOVA
+	krus = format(kruskal.test(use_data[,i], factor(use_data$Genus))$p.value, scientific=T, digits=T)
+
+	mtexti(paste('Kruskal-Wallis: P =', krus), 4)
+
+	dev.off()
+}
+
+
+
+
+######################################################
 ### Linear Models of Individual Traits
 
 library(lme4)
 library(LMERConvenienceFunctions)
+
+# Create objects for storing models
+modlist = vector('list', length(use_traits)*length(env_vars))
+dim(modlist) = c(length(use_traits),length(env_vars))
+dimnames(modlist) = list(use_traits, env_vars)
+
+parm_ests = array(NA, dim=c(length(use_traits), length(env_vars), 5, 3), 
+	dimnames = list(use_traits, env_vars, c('sigma.samp','sigma.genus','sigma.res','b0','b1'), c('est','low95','up95')))
+
+genus_ests = array(NA, dim=c(length(use_traits), length(env_vars), length(unique(model_data$Genus)), 3), 
+	dimnames = list(use_traits, env_vars, levels(factor(model_data$Genus)), c('est','low95','up95')))
+
+
+## Loop through all traits and all env vars
+# Note that number of observations and levels(SampID) will differ across models
+for(i in use_traits){
+for(j in env_vars){
+	
+	mod = lmer(model_data[,i] ~ 1 + model_data[,j]  + (1|Genus) + (1|SampID), data=model_data, REML=T)
+	
+	modlist[i,j][[1]] = mod
+	
+	ests = c(data.frame(VarCorr(mod))[,'sdcor'], fixef(mod))
+	g_ests = ranef(mod, whichel='Genus')[[1]]
+	ints = confint(mod, parm=1:6, method='profile')
+	g_sds = sqrt(as.numeric(attr(ranef(mod, whichel='Genus', condVar=T)[[1]], 'postVar')))
+	g_ints = g_ests$'(Intercept)' + g_sds%*%t(c(-1.96,1.96))
+	
+	parm_ests[i,j,,'est'] = ests
+	parm_ests[i,j,,c('low95','up95')] = ints
+	genus_ests[i,j,rownames(g_ests),'est'] = g_ests$'(Intercept)'
+	genus_ests[i,j,rownames(g_ests),c('low95','up95')] = g_ints
+}}
+
+save(modlist, parm_ests, genus_ests, file='./Analysis/REML single variable FT models.RData')
+
+## Random slope models
+
+# Plot trait ~ env relationships for different genera
+
+# Loop through genera
+genera = levels(factor(model_data$Genus))
+use_col = colorRampPalette(mycolor)(length(genera)); names(use_col) = genera
+
+pdf('./Analysis/Figures/trait-env relationships by genus.pdf', height=6, width=9)
+par(mfrow=c(2,3))
+par(mar=c(4,4,1,1))
+for(i in use_traits){
+for(j in env_vars){
+	
+	plot(model_data[model_data$Genus==g,c(j,i)], las=1, xlab=xvarnames[j], ylab=traitnames[i,'displayName'],
+		pch=21, bg=use_col[factor(model_data$Genus)], cex=.8)
+	
+	for(g in genera){
+		this_data = subset(model_data, Genus==g)
+		xvar = this_data[,j]
+		yvar = this_data[,i] 
+		if(length(yvar[!is.na(yvar)]) > 3){
+			this_mod = lm(yvar~xvar)
+			this_func = function(x) predict(this_mod, data.frame(xvar=x))
+		
+			sig = anova(this_mod)[1,'Pr(>F)']<0.05			
+			use_lwd = ifelse(sig, 2, 1)
+			use_lty = ifelse(sig, 1, 2)
+
+			curve(this_func, from=min(xvar), to=max(xvar), add=T,
+				lwd=use_lwd, lty=use_lty, col=use_col[g])
+		}
+	}
+}
+plot.new()
+legend('center', genera, col=use_col, lwd=2, bty='n')
+}
+dev.off()
+
+# Based on these figure it is probably not necessary to fit a random slopes model.
+# Also, there isn't enough data across levels to fit a random slopes model (we get cor=-1 between slope and intercept)
+i = 'Chla2b'
+j = 'Light_mean'
+
+yvar = scale(model_data[,i], center=T, scale=F) # center response so that we can estimate random slopes
+lme0 = lmer(yvar ~ model_data[,j] + (1|Genus), data=model_data, REML=T)
+lme1 = lmer(yvar ~ model_data[,j] + (0+model_data[,j]|Genus), data=model_data, REML=T)
+lme2 = lmer(yvar ~ model_data[,j] + (1|Genus) + (1|SampID), data=model_data, REML=T)
+AIC(lme0, lme1, lme2)
+VarCorr(lme1)
+
+# For Water_capacity ~ Light_mean, lme2 was much better and random slopes had very small variance
+# For Tot_chl_DW ~ Light_mean, lme2 was much better  and random slopes had very small variance
+
+## Plot estimated fixed effects
+library(reshape)
+library(lattice)
+
+xvar_levels = factor(env_vars)
+
+pdf('./Analysis/Figures/REML single variable model effects site effects.pdf', height=9, width=4)
+layout(matrix(1:length(use_traits), ncol=1))
+par(mar=c(2,13,2,.5))
+for(i in use_traits){
+	this_data = parm_ests[i,,'b1',]
+	xrange = range(this_data)
+	plot(as.numeric(xvar_levels)~this_data[,'est'], xlim=xrange, axes=F, 
+		xlab='', ylab='', lwd=1)
+	abline(v=0, col='grey50', lty=2)
+	segments(this_data[, 'low95'], as.numeric(xvar_levels), 
+		this_data[, 'up95'], as.numeric(xvar_levels), lwd=1)
+	axis(1)
+	axis(2, at=1:length(env_vars), labels=xvarnames[xvar_levels], las=1)
+	mtext(traitnames[i,'displayName'], 3, 0)
+	box()
+}
+dev.off()
+
+## Plot variance components (one chart for each predictor variable)
+# Make sure to load aov_heights() from below
+
+for(j in env_vars){
+
+pdf(paste('./Analysis/Figures/variance components',j,'models site effects.pdf'), height=7, width=6)
+varcomp = parm_ests[,j,c('sigma.samp','sigma.genus','sigma.res'),]
+plot_data = t(varcomp[,,'est'])
+colnames(plot_data) = traitnames[use_traits,'displayName']
+
+dotchart(plot_data, las=2, labels=c('Sample','Genus','Residual'), xlim=c(0, max(varcomp)), pch=16)
+xvals = as.numeric(matrix(1:35, nrow=5)[1:3,])
+segments(t(varcomp[7:1,,'low95']),xvals,t(varcomp[7:1,,'up95']),xvals)
+mtext(expression(sigma), 1, 2)
+dev.off()
+
+}
+
+## Plot estimated random effects for each genus
+# From models of Light_mean
+j = 'Light_mean'
+
+xvar_levels = factor(dimnames(genus_ests)[[3]])
+
+pdf('./Analysis/Figures/REML genus random effects from Light_mean models.pdf', height=12, width=4)
+layout(matrix(1:length(use_traits), ncol=1))
+par(mar=c(2,13,2,.5))
+for(i in use_traits){
+	this_data = genus_ests[i,j,,]
+	plot_order = rank(this_data[,'est'])
+	xrange = range(this_data, na.rm=T)
+	plot(plot_order~this_data[,'est'], xlim=xrange, axes=F, 
+		xlab='', ylab='', lwd=1)
+	#abline(v=0, col='grey50', lty=2)
+	segments(this_data[, 'low95'], plot_order, 
+		this_data[, 'up95'], plot_order, lwd=1)
+	axis(1)
+	axis(2, at=as.numeric(xvar_levels), labels=xvar_levels[order(plot_order)], las=1)
+	mtext(traitnames[i,'displayName'], 3, 0)
+	box()
+}
+dev.off()
+
+# NOT SURE WHY CHLA2B MODELS CAN'T ESTIMATE GENUS EFFECTS 
+this_mod = modlist['Chla2b','Vpd_mean'][[1]]
+table(this_mod@frame$Genus) # only 1 Phaeophyscia and 2 Myelochroa
+
+
+mod = lmer(Chla2b~Light_mean + (1|Genus) + (1|SampID), data=subset(model_data, !(Genus %in% c('Phaeophyscia','Myelochroa','Parmelinopsis','Physcia'))), REML=T)
+mod1 = lm(Chla2b~Vpd_mean, data=model_data)
+
+mod = lmer(Chla2b~Light_mean + (1|Genus) + (1|SampID), data=subset(model_data, Genus %in% c('Punctelia','Parmotrema')), REML=T)
+mod = lmer(Chla2b~Light_mean + (1|SampID), data=model_data, REML=T)
+
+
+## Run models that control for environmental differences across sites
+modlist_site = vector('list', length(use_traits)*length(env_vars))
+dim(modlist_site) = c(length(use_traits),length(env_vars))
+dimnames(modlist_site) = list(use_traits, env_vars)
+
+parm_ests_site = array(NA, dim=c(length(use_traits), length(env_vars), 6, 3), 
+	dimnames = list(use_traits, env_vars, c('sigma.samp','sigma.genus','sigma.res','b0','site','b1'), c('est','low95','up95')))
+
+genus_ests_site = array(NA, dim=c(length(use_traits), length(env_vars), length(unique(model_data$Genus)), 3), 
+	dimnames = list(use_traits, env_vars, levels(factor(model_data$Genus)), c('est','low95','up95')))
+
+for(i in use_traits){
+for(j in env_vars){
+	
+	mod = lmer(model_data[,i] ~ 1 + factor(Year) + model_data[,j]  + (1|Genus) + (1|SampID), data=model_data, REML=T)
+	
+	modlist[i,j][[1]] = mod
+	
+	ests = c(data.frame(VarCorr(mod))[,'sdcor'], fixef(mod))
+	g_ests = ranef(mod, whichel='Genus')[[1]]
+	ints = confint(mod, parm=1:6, method='profile')
+	g_sds = sqrt(as.numeric(attr(ranef(mod, whichel='Genus', condVar=T)[[1]], 'postVar')))
+	g_ints = g_ests$'(Intercept)' + g_sds%*%t(c(-1.96,1.96))
+	
+	parm_ests[i,j,,'est'] = ests
+	parm_ests[i,j,,c('low95','up95')] = ints
+	genus_ests[i,j,rownames(g_ests),'est'] = g_ests$'(Intercept)'
+	genus_ests[i,j,rownames(g_ests),c('low95','up95')] = g_ints
+}}
+
+save(modlist_site, parm_ests_site, genus_ests_site, file='./Analysis/REML single variable FT models with site effects.RData')
+
+# Compare site effects across models
+parm_ests[,,'site','est']
+
+
+## Make four-panel plot of model predictions with and without site effects
+xvar_factor = c(0.001, 100, 1, 1, 100); names(xvar_factor) = env_vars
+
+# A function that fits the mean line for the models without site effects
+modline = function(x, i, j){
+	y = parm_ests[i,j,'b0','est'] + parm_ests[i,j,'b1','est']*(x*xvar_factor[j])
+	y = exp(y)
+	if(i=='Cortex_thickness') y = y-1
+	y
+}
+
+# A fucntion that fits separate lines for each site
+modline_site = function(x, i, j, year){
+	y = parm_ests_site[i,j,'b0','est'] +  ifelse(year==2013, 0, 1)*parm_ests_site[i,j,'site','est'] + parm_ests_site[i,j,'b1','est']*(x*xvar_factor[j])
+	y = exp(y)
+	if(i=='Cortex_thickness') y = y-1
+	y
+}
+
+use_col = c('white','grey80')
+
+svg('./Analysis/Figures/compare site effects vpd_mean.svg', height=6, width=6)
+par(mfrow=c(2,2))
+par(mar=c(2,4,1,1))
+for(i in c('Water_capacity','STA','Rhizine_length','Cortex_thickness')){
+	
+	plot(use_data[,i]~use_data$Vpd_mean, pch=21, bg=use_col[factor(use_data$Year)],las=1, 
+		ylab=traitnames[i,'displayName'], xlab='')
+		
+	curve(modline(x, i, 'Vpd_mean'), from=min(use_data$Vpd_mean), to = max(use_data$Vpd_mean), add=T, lwd=3)
+	curve(modline_site(x, i, 'Vpd_mean', 2013), from=min(subset(use_data, Year==2013)$Vpd_mean), to = max(subset(use_data, Year==2013)$Vpd_mean),
+		add=T, lwd=4, col=1)
+	curve(modline_site(x, i, 'Vpd_mean', 2013), from=min(subset(use_data, Year==2013)$Vpd_mean), to = max(subset(use_data, Year==2013)$Vpd_mean),
+		add=T, lwd=3, col=use_col[1], lty=1)
+	curve(modline_site(x, i, 'Vpd_mean', 2014), from=min(subset(use_data, Year==2014)$Vpd_mean), to = max(subset(use_data, Year==2014)$Vpd_mean),
+		add=T, lwd=4, col=1)
+	curve(modline_site(x, i, 'Vpd_mean', 2014), from=min(subset(use_data, Year==2014)$Vpd_mean), to = max(subset(use_data, Year==2014)$Vpd_mean),
+		add=T, lwd=3, col=use_col[2], lty=1)
+}
+dev.off()
+
+
+## Plot cortex thickness models with different lines for each genus
+genera = levels(factor(use_data$Genus))
+use_col = colorRampPalette(mycolor)(length(genera)); names(use_col) = genera
+
+modline_g = function(x, i, j, g){
+	y = parm_ests[i,j,'b0','est'] + parm_ests[i,j,'b1','est']*(x*xvar_factor[j]) + genus_ests[i,j,g,'est']
+	y = exp(y)
+	if(i=='Cortex_thickness') y = y-1
+	y
+}
+
+svg('./Analysis/Figures/model predictions cortex thickness.svg', height=4, width=9)
+par(mfrow=c(1,3))
+par(mar=c(4,3,1,1))
+for(j in c('Vpd_mean','Temp_max','Light_mean')){
+	plot(use_data$Cortex_thickness ~ use_data[,j], pch=21, bg = use_col[use_data$Genus], las=1,
+		ylab='', xlab=xvarnames[j])
+
+	for(g in genera){
+		curve(modline_g(x, 'Cortex_thickness', j, g), from=min(use_data[,j]), to = max(use_data[,j]), 
+			add=T, col=use_col[g])
+	}
+
+	curve(modline(x, 'Cortex_thickness',j), from=min(use_data[,j]), to = max(use_data[,j]), 
+		add=T, lwd=3)
+
+}
+dev.off()
+
+
+## Run models for Duke Forest data only in case VPD relationships are driven by site-level differences
+duke_data = subset(model_data, Year==2014)
+
+# Create objects for storing models
+modlist_duke = vector('list', length(use_traits)*length(env_vars))
+dim(modlist_duke) = c(length(use_traits),length(env_vars))
+dimnames(modlist_duke) = list(use_traits, env_vars)
+
+parm_ests_duke = array(NA, dim=c(length(use_traits), length(env_vars), 5, 3), 
+	dimnames = list(use_traits, env_vars, c('sigma.samp','sigma.genus','sigma.res','b0','b1'), c('est','low95','up95')))
+
+genus_ests_duke = array(NA, dim=c(length(use_traits), length(env_vars), length(unique(model_data$Genus)), 3), 
+	dimnames = list(use_traits, env_vars, levels(factor(model_data$Genus)), c('est','low95','up95')))
+
+# Loop through all traits and all env vars
+for(i in use_traits){
+for(j in env_vars){
+	mod = lmer(duke_data[,i] ~ 1 + duke_data[,j] + (1|Genus) + (1|SampID), data=duke_data, REML=T)
+	modlist_duke[i,j][[1]] = mod
+	
+	ests = c(data.frame(VarCorr(mod))[,'sdcor'], fixef(mod))
+	g_ests = ranef(mod, whichel='Genus')[[1]]
+	ints = confint(mod, parm=1:5, method='profile')
+	g_sds = sqrt(as.numeric(attr(ranef(mod, whichel='Genus', condVar=T)[[1]], 'postVar')))
+	g_ints = g_ests$'(Intercept)' + g_sds%*%t(c(-1.96,1.96))
+	
+	parm_ests_duke[i,j,,'est'] = ests
+	parm_ests_duke[i,j,,c('low95','up95')] = ints
+	genus_ests_duke[i,j,rownames(g_ests),'est'] = g_ests$'(Intercept)'
+	genus_ests_duke[i,j,rownames(g_ests),c('low95','up95')] = g_ints
+}}
+
+save(modlist_duke, parm_ests_duke, genus_ests_duke, file='./Analysis/REML single variable FT models Duke Forest.RData')
+
+pdf('./Analysis/Figures/REML single variable model effects Duke Forest.pdf', height=9, width=4)
+layout(matrix(1:length(use_traits), ncol=1))
+par(mar=c(2,13,2,.5))
+for(i in use_traits){
+	this_data = parm_ests_duke[i,,'b1',]
+	xrange = range(this_data)
+	plot(as.numeric(xvar_levels)~this_data[,'est'], xlim=xrange, axes=F, 
+		xlab='', ylab='', lwd=1)
+	abline(v=0, col='grey50', lty=2)
+	segments(this_data[, 'low95'], as.numeric(xvar_levels), 
+		this_data[, 'up95'], as.numeric(xvar_levels), lwd=1)
+	axis(1)
+	axis(2, at=1:length(env_vars), labels=xvarnames[xvar_levels], las=1)
+	mtext(traitnames[i,'displayName'], 3, 0)
+	box()
+}
+dev.off()
+
+
+
+
+##############################################
+### Decomposition of community trait variation into turnover versus intraspecific variation
+## From Leps et al 2011, Ecography
+source('./Analysis/Leps2011_trait_functions.R')
+
+## Run code at the beginning of the previous section to get model_data with scaled predictors and log-transformed traits
+
+## Calculate genus-level mean traits
+gen_means = aggregate(model_data[,use_traits], list(Genus=model_data$Genus), FUN=function(x) mean(x, na.rm=T))
+gen_means[is.na(gen_means)] = NA
+rownames(gen_means) = gen_means$Genus
+
+gen_vars = aggregate(model_data[,use_traits], list(Genus=model_data$Genus), FUN=function(x) var(x, na.rm=T))
+
+## Calculate species-level mean traits
+sp_means = aggregate(model_data[,use_traits], list(Species=use_data$TaxonID), FUN=function (x) mean(x, na.rm=T))
+sp_means[is.na(sp_means)] = NA
+rownames(sp_means) = sp_means$Species
+
+# Substitute genus-averaged traits for genus-only taxa
+gen_only = rownames(sp_means)[which(taxa[rownames(sp_means),'TaxonConcept']=='genus')]
+sp_means[gen_only,use_traits] = gen_means[taxa[gen_only,'Genus'],use_traits]
+
+## Calculate specific average traits for each sample
+SA_traits = aggregate(model_data[,use_traits], list(SampID=model_data$SampID), FUN=function(x) mean(x, na.rm=T))
+SA_traits[is.na(SA_traits)] = NA
+rownames(SA_traits) = paste('S', SA_traits$SampID, sep='')
+SA_traits = SA_traits[,-1]
+SA_traits = as.matrix(SA_traits)
+
+## Calculate fixed average traits for each sample
+sampXsp_abun = xtabs(~SampID+TaxonID, data=use_data)
+rownames(sampXsp_abun) = paste('S',rownames(sampXsp_abun), sep='')
+sampXgen_abun = xtabs(~SampID+Genus, data=use_data)
+rownames(sampXgen_abun) = paste('S', rownames(sampXgen_abun), sep='')
+
+# FA traits based on genus-level means
+FA_traits_gen = matrix(NA, nrow=nrow(sampXgen_prop), ncol=length(use_traits))
+rownames(FA_traits_gen) = rownames(sampXgen_prop); colnames(FA_traits_gen) = use_traits
+
+for(j in use_traits){
+	these_means = gen_means[,j]
+
+	# Re-scale community data omitting thalli that have missing trait values
+	use_comm = sampXgen_abun[,!is.na(these_means)]
+	use_comm = use_comm/rowSums(use_comm)
+	these_means = these_means[!is.na(these_means)]
+	
+	# Calculate community weighted averages using taxon means
+	FA_traits_gen[,j] = use_comm %*% these_means
+}
+
+# Set fixed averages to NA whenever specific averages are NA
+FA_traits_gen[is.na(SA_traits)] = NA
+
+# FA trait based on species-level means
+FA_traits = matrix(NA, nrow=nrow(sampXsp_prop), ncol=length(use_traits))
+rownames(FA_traits) = rownames(sampXsp_prop); colnames(FA_traits) = use_traits
+
+for(j in use_traits){
+	these_means = sp_means[,j]
+
+	# Re-scale community data omitting thalli that have missing trait values
+	use_comm = sampXsp_abun[,!is.na(these_means)]
+	use_comm = use_comm/rowSums(use_comm)
+	these_means = these_means[!is.na(these_means)]
+	
+	# Calculate community weighted averages using taxon means
+	FA_traits[,j] = use_comm %*% these_means
+}
+
+# Set fixed averages to NA whenever specific averages are NA
+FA_traits[is.na(SA_traits)] = NA
+
+# Calculate intraspecific variability effect for each sample
+ISV_traits = SA_traits - FA_traits
+ISV_traits_gen = SA_traits - FA_traits_gen
+
+# Check distributions
+layout(matrix(1:(3*length(use_traits)), nrow=3, byrow=F))
+par(mar=c(4, 4, 3.5, 1))
+for(j in use_traits){
+	hist(SA_traits[,j], main=j, xlab='SA')
+	hist(FA_traits[,j], main='', xlab='FA')
+	hist(ISV_traits[,j], main='', xlab='ISV')
+}
+for(j in use_traits){
+	hist(SA_traits[,j], main=j, xlab='SA')
+	hist(FA_traits_gen[,j], main='', xlab='FA')
+	hist(ISV_traits_gen[,j], main='', xlab='ISV')
+}
+
+## Are species turnover and  intraspecific variability correlated?
+cor(FA_traits, ISV_traits, use='complete.obs')
+# Cortex_thickness moderately positively correlated (r = 0.37)
+# Rhizine length strongly negatively correlated (r = -0.72)
+# Chla2b moderately negatively correlted (r = -0.36)
+cor(FA_traits_gen, ISV_traits_gen, use='complete.obs')
+# Same correlation structure as for species-level averages
+
+# Plot correlations
+par(mfrow=c(2,4))
+par(mar=c(4,4,1,1))
+for(j in use_traits){
+	plot(FA_traits[,j], ISV_traits[,j], xlab='Interspecific', ylab='Intraspecific', 
+		main=traitnames[j,'displayName'])
+}
+
+## Trait decomposition analysis
+Xdata = unique(model_data[,c('SampID',env_vars)])
+rownames(Xdata) = paste('S', Xdata$SampID, sep='')
+Xdata = Xdata[,-1]
+Xdata = Xdata[rownames(SA_traits),]
+
+## Decomposition of total trait variance
+aov0 = matrix(NA, nrow=length(use_traits), ncol=3)
+rownames(aov0) = use_traits; colnames(aov0) = c('Interspecific','Intraspecific','Covariation')
+
+for(j in use_traits){
+	decomp = trait.flex.anova(~1, specif.avg=SA_traits[,j], const.avg=FA_traits[,j])
+	aov0[j,] = as.numeric(decomp$RelSumSq[1:3])
+}
+
+aov0_gen = matrix(NA, nrow=length(use_traits), ncol=3)
+rownames(aov0_gen) = use_traits; colnames(aov0_gen) = c('Interspecific','Intraspecific','Covariation')
+
+for(j in use_traits){
+	decomp = trait.flex.anova(~1, specif.avg=SA_traits[,j], const.avg=FA_traits_gen[,j])
+	aov0_gen[j,] = as.numeric(decomp$RelSumSq[1:3])
+}
+
+
+# A function that returns the y-coordinates of rectangles for plotting aov decomposition
+# Assumes numbers express relative components
+# x is a vector of 3 numbers where the 1st component gives the fixed average and the 3rd component give the covariation
+aov_heights = function(x){
+	y_mat = matrix(NA, nrow=2, ncol=3)
+	colnames(y_mat) = names(x)
+
+	if(x[3] >= 0){
+		y_mat[,1] = c(x[3] + x[2], sum(x))
+		y_mat[,2] = c(x[3], x[3] + x[2])
+		y_mat[,3] = c(0, x[3])		
+	} else {
+		y_mat[,1] = c(x[3] + x[2], sum(x))
+		y_mat[,2] = c(0, x[3] + x[2])
+		y_mat[,3] = c(x[3], 0)
+	}
+	y_mat
+}
+
+
+## Plot bar chart of tot trait variance decomposition
+bar_width=1
+space_width=0.25*bar_width
+
+bar_col = c('white','black','grey50')
+
+pdf('./Analysis/Figures/Trait SS Decomposition no Usnea.pdf', height=6, width=7)
+par(mar=c(0, 4, 8, 7))
+plot.new()
+plot.window(xlim=c(0, length(use_traits)*(bar_width+space_width)), ylim=c(min(aov0), 1))
+abline(h=0)
+for(i in 1:length(use_traits)){
+	these_y = aov_heights(aov0[i,])
+	rect(i*space_width+(i-1)*bar_width, these_y[1,], i*(space_width+bar_width), these_y[2,],
+		col=bar_col)
+}
+axis(2, las=1)
+mtext('Proportion Sum of Squares', 2, 2.8)
+par(xpd=T)
+text((1:length(use_traits))*(space_width+bar_width)-0.5*bar_width, 
+	1, traitnames[rownames(aov0),'displayName'], adj=c(-.05,0), srt=60)
+legend('right',colnames(aov0), fill=bar_col, bty='n', inset=-.25)
+par(xpd=F)
+dev.off()
+
+# Decomposition of environmental model
+# All env variables
+aov_env = trait.flex.anova(~., specif.avg=SA_traits[,j], const.avg=FA_traits[,j], data=Xdata)
+
+# Each variable separately
+aov_env = vector('list', length(use_traits)*length(env_vars))
+dim(aov_env) = c(length(use_traits),length(env_vars))
+dimnames(aov_env) = list(use_traits, env_vars)
+
+aovSS_array = array(NA, dim=c(length(use_traits), length(env_vars), 4, 5), 
+	dimnames=list(Trait=use_traits, Predictor=env_vars, Component=c('Interspecific','Intraspecific','Covariation','Total'), Statistic=c('Var','Res','Tot','F','P')))
+
+for(i in use_traits){
+for(j in env_vars){
+	this_aov = trait.flex.anova(~Xdata[,j], specif.avg = SA_traits[,i], const.avg=FA_traits[,i])
+	
+	aov_env[i,j][[1]] = this_aov
+	aovSS_array[i,j,,c('Var','Res','Tot')] = t(this_aov$SumSq)
+	aovSS_array[i,j,'Interspecific',c('F','P')] = as.numeric(this_aov$anova.turnover[1,4:5])
+	aovSS_array[i,j,'Intraspecific',c('F','P')] = as.numeric(this_aov$anova.diff[1,4:5])
+	aovSS_array[i,j,'Total',c('F','P')] = as.numeric(this_aov$anova.total[1,4:5])
+}}
+
+
+aovSS_melt = melt(aovSS_array[,,c('Interspecific','Intraspecific','Total'),c('Var','F','P')])
+aovSS_tab = cast(aovSS_melt, Trait+Predictor~Component+Statistic)
+
+write.csv(aovSS_tab, './Analysis/Figures/Environmental predictors of trait variation decomposition no Usnea.csv', row.names=F)
+
+totSS_tab = cast(melt(aovSS_array[,'Light_high',c('Interspecific','Intraspecific','Total'),'Tot']), Trait~Component)
+write.csv(totSS_tab, './Analysis/Figures/Total SS trait decomposition no Usnea.csv', row.names=F)
+
+# Explore negative covariation
+i='Rhizine_length'
+j='Vpd_daysatfreq'
+fa_mod = lm(FA_traits[,i]~Xdata[,j])
+isv_mod = lm(ISV_traits[,i]~Xdata[,j])
+
+################################################################################
+### RDA
+# Note: decided not to do RLQ or 4th corner analyses because we have traits measured on individuals, not matrix L
+
+library(vegan)
+
+# NEED TO SCALE TRAIT DATA BEFORE CALCULATING SAMPLE LEVEL MEANS SO THAT SOME TRAITS ARE NOT MORE STRONGLY WEIGHTED THAN OTHERS IN THE ORDINATION
+model_data[,use_traits] = scale(model_data[,use_traits], center=T, scale=T)
+
+# Re-calculate species mean traits
+sp_means = aggregate(model_data[,use_traits], list(Species=use_data$TaxonID), FUN=function (x) mean(x, na.rm=T))
+sp_means[is.na(sp_means)] = NA
+rownames(sp_means) = sp_means$Species
+gen_means = aggregate(model_data[,use_traits], list(Genus=model_data$Genus), FUN=function(x) mean(x, na.rm=T))
+gen_means[is.na(gen_means)] = NA
+rownames(gen_means) = gen_means$Genus
+gen_only = rownames(sp_means)[which(taxa[rownames(sp_means),'TaxonConcept']=='genus')]
+sp_means[gen_only,use_traits] = gen_means[taxa[gen_only,'Genus'],use_traits]
+
+
+# This code relies on matrices of trait means across samples calculated in the previous section:
+# SA_traits means of individual thalli
+# FA_traits means based on species present in samples
+# ISV_traits = SA_traits-FA_traits
+# Xdata = sample environment data that matches order  or trait mean matrices
+
+## We re-calculte these matrices here because we are using scaled traits and we will use the species averages to impute trait values for samples where these are missing
+SA_traits = aggregate(model_data[,use_traits], list(SampID=model_data$SampID), FUN=function(x) mean(x, na.rm=T))
+SA_traits[is.na(SA_traits)] = NA
+rownames(SA_traits) = paste('S', SA_traits$SampID, sep='')
+SA_traits = SA_traits[,-1]
+SA_traits = as.matrix(SA_traits)
+
+sampXsp_abun = xtabs(~SampID+TaxonID, data=use_data)
+rownames(sampXsp_abun) = paste('S',rownames(sampXsp_abun), sep='')
+
+FA_traits = matrix(NA, nrow=nrow(sampXsp_prop), ncol=length(use_traits))
+rownames(FA_traits) = rownames(sampXsp_prop); colnames(FA_traits) = use_traits
+
+for(j in use_traits){
+	these_means = sp_means[,j]
+
+	# Re-scale community data omitting thalli that have missing trait values
+	use_comm = sampXsp_abun[,!is.na(these_means)]
+	use_comm = use_comm/rowSums(use_comm)
+	these_means = these_means[!is.na(these_means)]
+	
+	# Calculate community weighted averages using taxon means
+	FA_traits[,j] = use_comm %*% these_means
+}
+
+# Impute missing trait values from species averages (because RDA does not allow missing values)
+SA_traits[is.na(SA_traits)] = FA_traits[is.na(SA_traits)] # 3 cases
+
+# Calculate intraspecific variability effect for each sample
+ISV_traits = SA_traits - FA_traits # Note that this will be 0 for cases when SA was imputed from FA
+
+## Regress on each environmental variables separately
+
+rda_env = vector('list', length(env_vars)*3)
+dim(rda_env) = c(length(env_vars), 3)
+dimnames(rda_env) = list(env_vars, c('Intraspecific','Interspecific','Total'))
+
+rda_array = array(NA, dim=c(length(env_vars), 4, 5), 
+	dimnames=list(Predictor=env_vars, Component=c('Interspecific','Intraspecific','Covariation','Total'), Statistic=c('Var','Res','Tot','F','P')))
+
+for(i in env_vars){
+	ord_SA = rda(SA_traits, Xdata[,i], scale=F)
+	ord_FA = rda(FA_traits, Xdata[,i], scale=F)
+	ord_ISV = rda(ISV_traits, Xdata[,i], scale=F)
+
+	rda_env[i,] = list(ord_FA, ord_ISV, ord_SA)
+
+	aov_SA = anova(ord_SA)
+	aov_FA = anova(ord_FA)
+	aov_ISV = anova(ord_ISV)
+
+	# Variance components from eigenvalues
+	rda_array[i,c('Intraspecific', 'Interspecific','Total'),c('Var','Res','Tot')] = t(sapply(list(ord_ISV,ord_FA,ord_SA), function(x){
+		eigs = eigenvals(x)
+		c(eigs[1], sum(eigs)-eigs[1], sum(eigs))
+	}))
+
+	# Covariation as the difference
+	rda_array[i,'Covariation',] = rda_array[i,'Total',] - rda_array[i,'Interspecific',] - rda_array[i,'Intraspecific',]
+
+	rda_array[i,c('Intraspecific','Interspecific','Total'), c('F','P')] = t(sapply(list(aov_ISV, aov_FA, aov_SA), function(x){
+		as.numeric(x[1,3:4])
+	}))
+}
+
+
+rda_melt = melt(rda_array[,c('Interspecific','Intraspecific','Total'),c('Var','F','P')])
+rda_tab = cast(rda_melt, Predictor~Component+Statistic)
+
+write.csv(rda_tab, './Analysis/Figures/Environmental predictors of multi-trait variance decomposition.csv', row.names=F )
+
+bar_width=1
+space_width=0.25*bar_width
+
+bar_col = c('white','black','grey50')
+
+pdf('./Analysis/Figures/Multi-trait Eigenval Decomposition.pdf', height=6, width=7)
+par(mar=c(11, 4, 0, 7))
+plot.new()
+plot.window(xlim=c(0, (length(env_vars) + 1)*(bar_width+space_width)), ylim=c(-.15, 1))
+abline(h=0)
+for(i in 1:length(env_vars)){
+	varcomp = rda_array[i,c('Interspecific','Intraspecific','Covariation'),'Var'] # Explained variance for each component
+	varcomp = varcomp / rda_array[i,'Total','Tot'] # Scale by total variance
+	
+	these_y = aov_heights(varcomp)
+	rect(i*space_width+(i-1)*bar_width, these_y[1,], i*(space_width+bar_width), these_y[2,],
+		col=bar_col)
+}
+
+varcomp = rda_array[1,c('Interspecific','Intraspecific','Covariation'),'Tot'] / rda_array[1,'Total','Tot']
+these_y = aov_heights(varcomp)
+rect((i+1)*space_width+(i)*bar_width, these_y[1,], (i+1)*(space_width+bar_width), these_y[2,], col=bar_col)
+
+axis(2, las=3)
+mtext('Proportion Variance', 2, 2.8)
+par(xpd=T)
+text((1:length(env_vars))*(space_width+bar_width)-0.5*bar_width, 
+	-.15, xvarnames[env_vars], adj=c(1,0.5), srt=90)
+legend('right',colnames(aov0), fill=bar_col, bty='n', inset=-.25)
+text((i+1)*(space_width+bar_width)-0.5*bar_width, -.15, 'Total', adj=c(1,0.5), srt=90)
+par(xpd=F)
+dev.off()
+
+
+################################################################
+### Linear Models of Trait Variation at sample scale (trait diversity)
+library(reshape) #melt
+
+# Make a data frame of data for modeling
+use_traits = c('Water_capacity','Thallus_thickness','STA','Cortex_thickness','Rhizine_length','Tot_chl_DW','Chla2b')
+model_data = use_data[,c(use_traits, env_vars, 'Genus','SampID')]
+
+# DONT DO THIS YET
+# Transform responses
+# Effectively we'll be fitting log-normal models since all responses are constrained to be positive
+# Cortex thickness can be 0 so we add 1
+#model_data$Cortex_thickness = model_data$Cortex_thickness + 1
+#for(y in use_traits) model_data[,y] = log(model_data[,y])
+
+# Re-scale predictors
+model_data$Light_mean = model_data$Light_mean/10000
+model_data$Temp_max = model_data$Temp_max/10
+
+
+## Calculate metrics of single trait dispersion for each sample
+samps = unique(model_data$SampID)
+cft_disp = array(NA, dim=c(length(samps),7,2), dimnames=list(SampID=samps, Trait=use_traits, Metric = c('cv','mpd')))
+for(i in use_traits){
+	cft_disp[,i,'cv'] = tapply(model_data[,i], model_data$SampID, function(x) sqrt(var(x, na.rm=T))/mean(x, na.rm=T))
+	cft_disp[,i,'mpd'] = tapply(model_data[,i], model_data$SampID, function(x) mean(dist(x[!is.na(x)])))
+}
+
+# Bootstrap null distribution for trait dispersion
+N=10000
+cft_disp_null = array(NA, dim=c(length(samps),7,2,N), dimnames=list(SampID=samps, Trait=use_traits, Metric= c('cv','mpd'), 1:N))
+
+for(i in use_traits){
+	NAinds = which(is.na(model_data[,i]))
+	x = model_data[-NAinds, i]
+	fact = model_data[-NAinds, 'SampID']
+	
+	for(j in 1:N){
+		use_order = sample(fact)
+		cv = tapply(x, use_order, function(y) sqrt(var(y, na.rm=T))/mean(y, na.rm=T))
+		mpd = tapply(x, use_order, function(y) mean(dist(y[!is.na(y)])))
+	
+		cft_disp_null[names(cv),i,'cv',j] = cv
+		cft_disp_null[names(mpd),i,'mpd',j] = mpd
+	}
+}	
+
+
+# Calculate z-scores for actual trait dispersions based on null distribution
+null_mean = apply(cft_disp_null, c(1,2,3), mean)
+null_sd = apply(cft_disp_null, c(1,2,3), function(x) sqrt(var(x)))
+
+cft_disp_z = (cft_disp - null_mean)/null_sd
+
+plot(cft_disp_z[,'Water_capacity','mpd']~ env[paste('S',samps, sep=''),'Vpd_mean'])
+plot(cft_disp_z[,'Cortex_thickness','mpd']~ env[paste('S',samps, sep=''),'Light_mean'])
+plot(cft_disp_z[,'STA','mpd']~ env[paste('S',samps, sep=''),'Vpd_mean'])
+
+cft_disp_df = melt(cft_disp)
+cft_disp_df$z = melt(cft_disp_z)[,'value']
+
+cft_disp_df = merge(cft_disp_df, unique(model_data[,c('SampID',env_vars)]))
+
+pdf('./Analysis/Figures/FT mpd vs env.pdf', height=9, width=9)
+par(mfrow=c(length(use_traits), length(env_vars)))
+par(mar=c(4,4,1,1))
+for(i in use_traits){
+for(j in env_vars){
+
+	this_data = subset(cft_disp_df, Trait==i&Metric=='mpd')
+	plot(z~this_data[,j], data=this_data, xlab=j, ylab=i)
+	abline(h=c(-2,2))
+
+}}
+dev.off()
+
+
+
+################################################################################
+### Old Analyses
+
+
+### Two-way ANOVA of each trait with sample and Genus as predictors
 
 # Make SampID, TreeID, and Genus a factor
 use_data$SampID = factor(use_data$SampID)
@@ -222,10 +1190,6 @@ functraits = c('STA','Cortex_thickness','Thallus_thickness','Tot_chl_DW','Chla2b
 	'Sexual_abun','Asexual_abun','Water_capacity','Rhizine_length','Rhizine_abun')
 numtraits = rownames(subset(traitnames, mode=='N'))
 cattraits = rownames(subset(traitnames, mode=='O'))
-
-
-### Two-way ANOVA of each trait with sample and Genus as predictors
-
 
 # TreeID, SampID and Genus are random effects with SampID nested in TreeID
 trait_aov = lapply(functraits[functraits%in%numtraits], function(i){
@@ -276,98 +1240,10 @@ names(trait_aov) = functraits[functraits%in%numtraits]
 # Rhizine_length : all variance explained by genus
 
 
-# Make a data frame of data for modeling
-use_traits = c('Water_capacity','Thallus_thickness','STA','Cortex_thickness','Rhizine_length','Tot_chl_DW','Chla2b')
-model_data = use_data[,c(use_traits, env_vars, 'Genus','SampID')]
-
-# Transform responses
-# Effectively we'll be fitting log-normal models since all responses are constrained to be positive
-# Cortex thickness can be 0 so we add 1
-model_data$Cortex_thickness = model_data$Cortex_thickness + 1
-
-layout(matrix(1:(2*length(use_traits)), nrow=2, byrow=F))
-for(y in use_traits){
-	hist(model_data[,y], main=y)
-	hist(log(model_data[,y]), main=paste('log',y))
-}
-
-for(y in use_traits) model_data[,y] = log(model_data[,y])
-
-# Re-scale predictors
-model_data$Light_mean = model_data$Light_mean/10000
-model_data$Temp_max = model_data$Temp_max/10
-
-# Create objects for storing models
-modlist = vector('list', length(use_traits)*length(env_vars))
-dim(modlist) = c(length(use_traits),length(env_vars))
-dimnames(modlist) = list(use_traits, env_vars)
-
-parm_ests = array(NA, dim=c(length(use_traits), length(env_vars), 5, 3), 
-	dimnames = list(use_traits, env_vars, c('sigma.samp','sigma.genus','sigma.res','b0','b1'), c('est','low95','up95')))
-
-genus_ests = array(NA, dim=c(length(use_traits), length(env_vars), 11, 3), 
-	dimnames = list(use_traits, env_vars, levels(factor(model_data$Genus)), c('est','low95','up95')))
-
-
-## Loop through all traits and all env vars
-# Note that number of observations and levels(SampID) will differ across models
-for(i in use_traits){
-for(j in env_vars){
-	mod = lmer(model_data[,i] ~ 1 + model_data[,j] + (1|Genus) + (1|SampID), data=model_data, REML=T)
-	modlist[i,j][[1]] = mod
-	
-	ests = c(data.frame(VarCorr(mod))[,'sdcor'], fixef(mod))
-	g_ests = ranef(mod, whichel='Genus')[[1]]$'(Intercept)'
-	ints = confint(mod, parm=1:5, method='profile')
-	g_sds = sqrt(as.numeric(attr(ranef(mod, whichel='Genus', condVar=T)[[1]], 'postVar')))
-	g_ints = g_ests + g_sds%*%t(c(-1.96,1.96))
-	
-	parm_ests[i,j,,'est'] = ests
-	parm_ests[i,j,,c('low95','up95')] = ints
-	genus_ests[i,j,,'est'] = g_ests
-	genus_ests[i,j,,c('low95','up95')] = g_ints
-}}
-
-save(modlist, parm_ests, genus_ests, file='./Analysis/REML single variable FT models.RData')
-
-## Plot estimated fixed effects
-library(reshape)
-
-plot_data = melt(parm_ests[,,'b1','est'])
-low95_data = melt(parm_ests[,,'b1','est'])
-
-names(plot_data) = c('yvar','xvar','est')
-xyplot(xvar~est|yvar, data=plot_data, panel=function(x,y,subscripts,...){
-	panel.abline(v=0, col='grey50', lty=2)
-	panel.points(x,y, pch=16, col=1)
-	#panel.segments(parm_ests[1,y,,'low95'],y,parm_ests[1,y,,'up95'],y)
-})
-
-xvar_levels = factor(env_vars)
-
-pdf('./Analysis/Figures/REML single variable model effects zoomed.pdf', height=9, width=4)
-layout(matrix(1:length(use_traits), ncol=1))
-par(mar=c(2,13,2,.5))
-for(i in use_traits){
-	this_data = parm_ests[i,,'b1',]
-	xrange = c(-2,2)#range(this_data)
-	plot(as.numeric(xvar_levels)~this_data[,'est'], xlim=xrange, axes=F, 
-		xlab='', ylab='', lwd=1)
-	abline(v=0, col='grey50', lty=2)
-	segments(this_data[, 'low95'], as.numeric(xvar_levels), 
-		this_data[, 'up95'], as.numeric(xvar_levels), lwd=1)
-	axis(1)
-	axis(2, at=1:length(env_vars), labels=xvarnames[xvar_levels,'displayName'], las=1)
-	mtext(traitnames[i,'displayName'], 3, 0)
-	box()
-}
-dev.off()
-
-
-
 ###########################################
 ### Fit Baysian Models
 
+samples$Height_top
 
 library('R2OpenBUGS')
 library('coda')
@@ -921,198 +1797,6 @@ dev.off()
 
 
 
-################################################################
-### Linear Models of Trait Variation at sample scale (trait diversity)
-library(reshape) #melt
-
-# Make a data frame of data for modeling
-use_traits = c('Water_capacity','Thallus_thickness','STA','Cortex_thickness','Rhizine_length','Tot_chl_DW','Chla2b')
-model_data = use_data[,c(use_traits, env_vars, 'Genus','SampID')]
-
-# DONT DO THIS YET
-# Transform responses
-# Effectively we'll be fitting log-normal models since all responses are constrained to be positive
-# Cortex thickness can be 0 so we add 1
-#model_data$Cortex_thickness = model_data$Cortex_thickness + 1
-#for(y in use_traits) model_data[,y] = log(model_data[,y])
-
-# Re-scale predictors
-model_data$Light_mean = model_data$Light_mean/10000
-model_data$Temp_max = model_data$Temp_max/10
-
-
-## Calculate metrics of single trait dispersion for each sample
-samps = unique(model_data$SampID)
-cft_disp = array(NA, dim=c(length(samps),7,2), dimnames=list(SampID=samps, Trait=use_traits, Metric = c('cv','mpd')))
-for(i in use_traits){
-	cft_disp[,i,'cv'] = tapply(model_data[,i], model_data$SampID, function(x) sqrt(var(x, na.rm=T))/mean(x, na.rm=T))
-	cft_disp[,i,'mpd'] = tapply(model_data[,i], model_data$SampID, function(x) mean(dist(x[!is.na(x)])))
-}
-
-# Bootstrap null distribution for trait dispersion
-N=10000
-cft_disp_null = array(NA, dim=c(length(samps),7,2,N), dimnames=list(SampID=samps, Trait=use_traits, Metric= c('cv','mpd'), 1:N))
-
-for(i in use_traits){
-	NAinds = which(is.na(model_data[,i]))
-	x = model_data[-NAinds, i]
-	fact = model_data[-NAinds, 'SampID']
-	
-	for(j in 1:N){
-		use_order = sample(fact)
-		cv = tapply(x, use_order, function(y) sqrt(var(y, na.rm=T))/mean(y, na.rm=T))
-		mpd = tapply(x, use_order, function(y) mean(dist(y[!is.na(y)])))
-	
-		cft_disp_null[names(cv),i,'cv',j] = cv
-		cft_disp_null[names(mpd),i,'mpd',j] = mpd
-	}
-}	
-
-
-# Calculate z-scores for actual trait dispersions based on null distribution
-null_mean = apply(cft_disp_null, c(1,2,3), mean)
-null_sd = apply(cft_disp_null, c(1,2,3), function(x) sqrt(var(x)))
-
-cft_disp_z = (cft_disp - null_mean)/null_sd
-
-plot(cft_disp_z[,'Water_capacity','mpd']~ env[paste('S',samps, sep=''),'Vpd_mean'])
-plot(cft_disp_z[,'Cortex_thickness','mpd']~ env[paste('S',samps, sep=''),'Light_mean'])
-plot(cft_disp_z[,'STA','mpd']~ env[paste('S',samps, sep=''),'Vpd_mean'])
-
-cft_disp_df = melt(cft_disp)
-cft_disp_df$z = melt(cft_disp_z)[,'value']
-
-cft_disp_df = merge(cft_disp_df, unique(model_data[,c('SampID',env_vars)]))
-
-pdf('./Analysis/Figures/FT mpd vs env.pdf', height=9, width=9)
-par(mfrow=c(length(use_traits), length(env_vars)))
-par(mar=c(4,4,1,1))
-for(i in use_traits){
-for(j in env_vars){
-
-	this_data = subset(cft_disp_df, Trait==i&Metric=='mpd')
-	plot(z~this_data[,j], data=this_data, xlab=j, ylab=i)
-	abline(h=c(-2,2))
-
-}}
-dev.off()
-
-
-#################################################################
-### Assessing variation within species
-
-library(DTK) # multiple comparison test for unequal variances
-
-# Check trait variances within Genera
-sapply(rownames(subset(traitnames, mode=='N')), function(x){
-	tapply(use_data[,x], use_data$Genus, var, na.rm=T)
-})
-
-# Compare trait means across Genera (T3- Dunnett modified Tukey-Kramer test)
-DTK_tests = sapply(rownames(subset(traitnames, mode=='N')), function(x){
-	DTK = DTK.test(use_data[,x], use_data$Genus, a=0.05)
-	DTK[[2]]
-}, simplify=F)
-
-# Pair-wise tests (DTK)
-diff_pairs = sapply(rownames(subset(traitnames, mode=='N')), function(x){
-	names(which(apply(DTK_tests[[x]][,2:3], 1, prod)>0))
-})
-
-# Number of observations of each trait for each genus
-Nobs = sapply(rownames(traitnames), function(x){
-	tapply(use_data[,x], use_data$Genus, function(y) sum(!is.na(y)))
-})
-
-# Wilcox rank-sum test for differences among pairs in ordinal data
-diff_pairs_ord = sapply(rownames(subset(traitnames, mode=='O')), function(x){
-	WT = pairwise.wilcox.test(as.numeric(use_data[,x]), use_data$Genus, p.adjust.method='hochberg', exact=F)$p.value
-	apply(which(WT <0.05, arr.ind=T), 1, function(y) paste(rownames(WT)[y[1]],colnames(WT)[y[2]], sep='-'))
-})
-
-# Boxplots of trait variation across genera
-traitnames = traitnames[order(traitnames$type),]
-
-# Numeric traits
-numtraits = rownames(subset(traitnames, mode=='N'))
-for( i in numtraits) ){
-	svg(paste('./Analysis/Figures/',i,' by Genus boxplot.svg', sep=''), height=5, width=4)
-	par(mar=c(8,5,1,3))
-	meds = tapply(use_data[,i], use_data$Genus, median, na.rm=T)
-	plotorder = names(meds)[order(meds)]
-	boxplot(use_data[,i]~factor(use_data$Genus, levels=plotorder), 
-		las=3, ylab=traitnames[i,'displayName'], 
-		lwd=1, pt.lwd=1, varwidth=T)
-	axis(4)
-
-	# ANOVA
-	ftest = anova(lm(use_data[,i]~factor(use_data$Genus, levels=plotorder)))
-	fval = round(ftest$'F value'[1],2)
-	pval = round(ftest$'Pr(>F)'[1],3)
-	usr = par('usr')
-	text(usr[1], usr[4], paste('F =', fval, 'P =',pval), srt=90, adj=c(1.1,1.1))
-
-	dev.off()
-}
-
-# Categorical traits
-cattraits = rownames(subset(traitnames, mode=='O'))
-for(i in cattraits){
-	counts = sapply(tapply(use_data[,i], use_data$Genus, function(y) as.numeric(table(y))), 
-		function(x) x)
-	rownames(counts) = levels(use_data[,i])
-	freqs = t(t(counts) / colSums(counts))
-	means = tapply(as.numeric(use_data[,i]), use_data$Genus, mean, na.rm=T)
-	plotorder = names(means)[order(means)]
-	
-	svg(paste('./Analysis/Figures/',i,' by Genus barplot.svg', sep=''), height=5, width=5)
-	par(mar=c(4,8,3,4))
-	use_col = colorRampPalette(mycol[2:9])(nrow(freqs))
-	barplot(freqs[,plotorder], horiz=T, las=1, col=use_col, xlab='',
-		width=log(colSums(counts)), main=traitnames[i, 'displayName'])
-	par(xpd=NA)
-
-	usr=par('usr')
-	legend(0.5, usr[4], rownames(freqs), fill=use_col, horiz=T,
-		xjust=.5, yjust=.5, bty='n')
-	par(xpd=F)
-	mtext('Proportion of Individuals', 1, 2.2)
-	
-	# Kruskal-Wallis One-way ANOVA
-	krus = format(kruskal.test(use_data[,i], factor(use_data$Genus))$p.value, scientific=T, digits=T)
-
-	mtexti(paste('Kruskal-Wallis: P =', krus), 4)
-
-	dev.off()
-}
-
-
-###################################################################
-### Distribution of species along environmental gradients
-
-# Calculate site X genus matrix
-
-counts  = data.frame(table(use_data$SampID, use_data$Genus))
-names(counts) = c('SampID','Genus','Abun')
-
-counts = merge(counts, env, all.x=T)
-
-i='Cortex_thickness'
-meds = tapply(use_data[,i], use_data$Genus, median, na.rm=T)
-plotorder = names(meds)[order(meds)]
-plotorder = plotorder[!(plotorder %in% c('Parmelinopsis','Myelochroa','Phaeophyscia'))]
-
-pdf('./Analysis/Figures/genus frequency vs Vpd_mean.pdf',height=7, width=4)
-layout(matrix(1:8, nrow=4, ncol=2, byrow=F))
-par(mar=c(2,2.5,1,.5))
-for(g in plotorder){
-	this_data = subset(counts, Genus==g)
-	plot(Abun/24~Vpd_mean, data=this_data, xlab='', ylab='', pch=16, ylim=c(0,0.5), las=1)
-	mtext(g,3,0,adj=0, cex=.8)
-}
-dev.off()
-
-
 
 
 svg('./Analysis/Figures/plot 3d light mean range temp.svg', height=4.8, width=6)
@@ -1134,98 +1818,7 @@ text(legR$rect$left+uxlim*0.06, legR$rect$top+uylim*0.02, 'Top', srt=60)
 dev.off()
 
 
-### OLD MODELS ###
 
-# info for OpenBUGS
-mod_data = list('y','samp','genus','n','J','G','temp','lmean','lrange')
-mod_init = function(){list(a=rnorm(J), b=rnorm(G), g1=rnorm(1), g2=rnorm(1), g3=rnorm(1), 
-	sigma.y=runif(1), sigma.a=runif(1), sigma.b=runif(1), mu.a=rnorm(1), mu.b=rnorm(1))}
-mod_parms = c('a','b','sigma.y','sigma.a','sigma.b','mu.a','mu.b','g1','g2','g3')
-
-# Run OpenBUGS
-#modbug = bugs(mod_data, mod_init, mod_parms, "bayes_mod_genus_temp_light_mean_range.txt", 
-#	n.chains=3, n.iter=100000, codaPkg=T, n.burnin=5000, n.thin=1)
-#modbug = read.bugs(modbug)
-
-#save(modbug, file=paste(i,'modbug1.RData', sep='_'))
-modbug = load('Tot_chl_modbug1.RData')
-
-# model 1b
-mod_data = list('y','samp','genus','n','J','G','temp','lmean','lrange')
-mod_init = function(){list(a=rnorm(J), b=rnorm(G), g1=rnorm(1), g2=rnorm(1), g3=rnorm(1), 
-	sigma.y=runif(1), sigma.a=runif(1), sigma.b=runif(1), mu.a=rnorm(1))}
-mod_parms = c('a','b','sigma.y','sigma.a','sigma.b','mu.a','g1','g2','g3')
-
-# Run OpenBUGS
-modbug1b = bugs(mod_data, mod_init, mod_parms, "bayes_mod_genus_temp_light_mean_range_1b.txt", 
-	n.chains=3, n.iter=100000, codaPkg=T, n.burnin=10000, n.thin=1)
-modbug1b = read.bugs(modbug1b)
-
-save(modbug1b, file=paste(i,'modbug1b.RData', sep='_'))
-modbug1b = load('Tot_chl_modbug1b.RData')
-
-
-mod_data = list('y','samp','genus','n','J','G','temp','lmean','lrange')
-mod_init = function(){list(a=rnorm(J), b=rnorm(G), g1=rnorm(1), g2=rnorm(1), g3=rnorm(1), 
-	sigma.y=runif(1), sigma.a=runif(1), sigma.b=runif(1), mu.y=rnorm(1), mu.a=rnorm(1), mu.b=rnorm(1))}
-mod_parms = c('a','b','sigma.y','sigma.a','sigma.b','mu.y','mu.a','mu.b','g1','g2','g3')
-#modbug2 = bugs(mod_data, mod_init, mod_parms, "bayes_mod_genus_temp_light_mean_range_2.txt", 
-#	n.chains=3, n.iter=100000, codaPkg=T, n.burnin=5000, n.thin=1)
-#modbug2 = read.bugs(modbug2)
-
-#save(modbug2, file=paste(i,'modbug2.RData', sep='_'))
-modbug2 = load('Tot_chl_modbug2.RData')
-
-
-# model with covariance between environmental predictors
-prior_cor = 0.1
-prior_var = 10000
-prior_prec = matrix(prior_cor*prior_var, 3,3)
-diag(prior_prec) <- prior_var
-prior_phi = ginv(prior_prec)
-
-mod_data = list('y','samp','genus','n','J','G','temp','lmean','lrange')
-mod_init = function(){list(a=rnorm(J), b=rnorm(G), g=rnorm(3), 
-	sigma.y=runif(1), sigma.a=runif(1), sigma.b=runif(1), 
-	mu.y=rnorm(1), mu.g=rnorm(3), Phi=rWishart(1, 5, prior_phi),
-	mu.g0=rep(0,3), prec=prior_prec, Phi0=prior_phi
-)}
-mod_parms = c('a','b','sigma.y','sigma.a','sigma.b','mu.y','g','mu.g','Sigma')
-
-modbug3 = bugs(mod_data, mod_init, mod_parms, "bayes_mod_genus_temp_light_mean_range_3.txt", 
-	n.chains=3, n.iter=1000, debug=T, n.burnin=0, n.thin=1)
-modbug3 = read.bugs(modbug3)
-
-
-# Questions:
-# Clearly not converging b/c a and b dependent on one another
-# However, parameters of interes, g, sigma are converging.
-# Can I use these model results?
-
-
-## Focal models with Mean temp and light range
-focal_traits = c('Tot_chl','Chla2b','Water_capacity','Cortex_width')
-
-i=focal_traits[1]
-mod= lmer(use_data[,i]~ 1+Temp_mean_sum+Light_range_sum+Light_mean_sum+(1|Genus)+(1|SampID), data=use_data, REML=F)
-anova(mod)
-
-
-
-
-
-
-
-
-## Plots:
-qqnorm(resid(mod_temp))
-plot(fitted(mod_temp), resid(mod_temp))
-abline(h=0)
-plot(na.omit(use_data[,i]),fitted(mod_temp), xlim=c(50,350), ylim=c(50, 350))
-abline(0,1)
-
-
-plot(use_data[,i]~use_data$Temp_mean_sum)
 
 ######################################################
 ### Old Code
