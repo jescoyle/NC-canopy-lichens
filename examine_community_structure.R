@@ -434,5 +434,37 @@ for(i in env_vars){
 
 cor(heightvar, Xdata)
 
+##########################################################
+### Diversity
+
+## NOT DONE YET
+## Plot taxonomic richness vs light and temp
+
+sampXsp = xtabs(~SampID+TaxonID, data=use_data)
+
+calc_rich = function(x, taxa){
+	these_taxa = taxa[names(x[x>0]),]
+	sp_gen = subset(these_taxa, TaxonConcept=='species')$Genus
+	gen = subset(these_taxa, TaxonConcept=='genus')$Genus
+	gen_nosp = setdiff(gen, sp_gen)
+
+	length(sp_gen)+length(gen_nosp)
+}
+
+richness = apply(sampXsp, 1, function(x) calc_rich(x, taxa))
+richness = data.frame(richness); richness$SampID=rownames(richness)
+
+env = merge(env, richness)
+
+plot(richness~Light_mean_sum, data=env)
+plot(richness~Temp_mean_sum, data=env)
+
+mod_rich = glm(richness~Light_mean_sum, data=env, family=poisson)
+summary(mod_rich)
+
+pdf('./Analysis/Figures/species richness histogram.pdf', height=4, width=4)
+par(mar=c(4,4,1,1))
+plot(table(env$richness), las=1, ylab='Num. Samples', xlab='Num. Species', ylim=c(0,20), lwd=4, lend=1)
+dev.off()
 
 
