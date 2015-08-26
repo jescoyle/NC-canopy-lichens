@@ -20,6 +20,20 @@ trees = read.csv(paste(sql_dir, 'trees.csv', sep=''))
 env = read.csv(paste(data_dir, 'loggerdata.csv', sep=''), row.names=1)
 
 rownames(lichen_taxa) = lichen_taxa$TaxonID
+env$SampID = rownames(env)
+
+# Load sample mean traits
+load('./Analysis/sample mean traits.RData')
+
+# Set working colors
+mycolor = read.csv('../blue2red_10colramp.txt')[9:2,]
+mycolor = rgb(mycolor, maxColorValue=255)# Set working colors
+
+# Calculate distance from top of tree
+samples$Height_top = sapply(1:nrow(samples), function(i){
+	trees[trees$TreeID==samples[i,'TreeID'],'Height']-samples[i,'Height']
+}) 
+
 
 ########################################################################
 ### Taxonomic community composition
@@ -28,6 +42,12 @@ rownames(lichen_taxa) = lichen_taxa$TaxonID
 use_samps = subset(samples, TreeID <=10)$SampID
 comm = subset(comm, SampID %in% use_samps)
 thalli = subset(thalli, SampID %in% use_samps)
+
+# Substitute NA for bad trait values
+thalli[thalli$ThallusID %in% c(419,501,521,541), 'STA'] = NA # Values abnormally high- area measured prob doesn't correspond to mass
+thalli[thalli$ThallusID==8, 'Water_capacity'] = NA # Can't have negative water capacity
+thalli[(thalli$Chla2b<0) & (!is.na(thalli$Chla2b)),'Chla2b'] = NA # Can't have negative ratios. Measurements probably erroneous
+thalli[thalli$Genus=='Usnea','Rhizine_length'] = NA # Usnea don't have rhizines
 
 # Make a site X species matrix only from thalli sampled for traits
 # Note- we will make a better one below that combines taxa known only to genus
@@ -126,12 +146,6 @@ save(sp_list, sampXsp, sampXsp_macro, sampXsp_crust, sampXsp_thalli, sampXsp_fol
 load('./Data/Derived Tables/sampXsp_matrices.RData')
 
 
-
-#########################################################################################
-### Ordination
-
-library(vegan)
-
 # Define predictors
 env_vars = c('Light_mean','Light_high','Temp_max','Vpd_mean','Vpd_daysatfreq')
 xvarnames = data.frame(var = env_vars)
@@ -142,18 +156,32 @@ names(xvarnames) = env_vars
 xvarnames_short = c('Mean Light','Full Sun Freq.','Max Temp.','Mean VPD','Sat. Air Freq.')
 names(xvarnames_short) = env_vars
 
+
+#########################################################################################
+### Ordination
+
+library(vegan)
+
 # Define positional predictors
 pos_vars = c('Height_top','Angle')
 
 # Define variables
-Y = sampXsp
+Y = sampXsp_thalli
 X = env[as.character(use_samps),env_vars]
-X = samples[as.character(use_samps), pos_vars]
+#X = samples[as.character(use_samps), pos_vars]
 W = factor(samples[as.character(use_samps),'Year'])
 names(W) = use_samps
 
+# Scale X data so that variances are similar
+X[,'Light_mean'] = X[,'Light_mean']/1000
+X[,'Light_high'] = X[,'Light_high']*100
+X[,'Vpd_daysatfreq'] = X['Vpd_daysatfreq']*100
+
 # Remove species with no observed occurence in this data set
 Y = Y[,colSums(Y)>0]
+
+# Remove ambiguous taxa: NOT DONE
+#Y = Y[,lichen_taxa[colnames(Y),'TaxonConcept']!='genus']
 
 # Remove samples with no observed species
 Y = Y[rowSums(Y)>0,]
@@ -162,9 +190,72 @@ Y = Y[rowSums(Y)>0,]
 X = X[rownames(Y),]
 W = W[rownames(Y)]
 
+# Make a matrix that defines which species belong to which genera
+taxon_hier = sapply(colnames(Y), function(x) colnames(Y) == substr(x, 1, 3))
+rownames(taxon_hier) = colnames(Y)
+
+# Define Hellinger distance function that finds 0 distance between genus sp. and species in the same genus.
+# i and j are vectors of species abundances
+# taxon_dependency is a binary matrix whose columns indicate the taxonomic hierarchy
+#	rownames are the taxa that are ambiguous (i.e. the genera)
+calc_Hellinger = function(i, j, taxon_dependency){
+	# Determine which taxa are ambiguous
+	ambig_taxa = which(colnames(taxon_dependency) %in% rownames(taxon_dependency))
+	
+	# Determine whether there is a lichen only identified to genus
+	if(sum(i[ambig_taxa])>0){
+	for(n in names(which(i[ambig_taxa]>0))){
+		# If the other site does have a species in that genus
+		# Distribute individuals among those species according to their abundance distribution at that site
+		dependents = names(which(j[taxon_dependency[n,]]>0))
+
+		if(length(dependents)>0){
+			Ni = i[n]
+			Nj = sum(j[dependents])
+			i[dependents] = Ni*j[dependents]/Nj
+			if(n!=dependents) i[n] = 0 # Checks whether dependent taxon is actually the same as the ambiguous taxon
+		}
+	}}
+
+	if(sum(j[ambig_taxa])>0){
+	for(n in names(which(j[ambig_taxa]>0))){
+		# If the other site does have a species in that genus
+		# Distribute individuals among those species according to their abundance distribution at that site
+		dependents = names(which(i[taxon_dependency[n,]]>0))
+
+		if(length(dependents)>0){
+			Nj = j[n]
+			Ni = sum(i[dependents])
+			j[dependents] = Nj*i[dependents]/Ni
+			if(n!=dependents) j[n] = 0
+		}
+	
+	}}
+	
+	# Calculate Hellinger distance
+	sqrt(sum((sqrt(i/sum(i)) - sqrt(j/sum(j)))^2))
+}
+
+Dmat = matrix(NA, nrow=nrow(Y), ncol=nrow(Y))
+rownames(Dmat) = rownames(Y)
+colnames(Dmat) = rownames(Y)
+for(i in rownames(Dmat)){
+for(j in colnames(Dmat)){
+	Dmat[i,j] = calc_Hellinger(Y[i,], Y[j,], taxon_hier[rowSums(taxon_hier)>0,])
+}}
+
+# PCoA on Dmat to get community matrix
+pcoa = cmdscale(Dmat, k = min(ncol(Y), nrow(Y)-1), eig=T)
+Y.p = pcoa$points
+
+## Constrained ordination on presence absence data
+
+# db-RDA on Hellinger distance matrix (PCoA followed by RDA)
+ord1 = rda(Y.p~., data=X)
 
 # CCA - constrained ordination on pres-abs data preserving chi-sq distance
 ord1 = cca(Y~., data=X)
+
 anova(ord1) # Test significance of whole model
 anova(ord1, by='axis')
 anova(ord1, by='term')
@@ -184,8 +275,14 @@ text(ord1, 'species', select=apply(spscores, 1, function(x) sqrt(x[1]^2 + x[2]^2
 text(ord1, display='bp', labels=c('Height','Angle'),  lwd=2, col=2)
 text(ord1, 'species', select=apply(spscores, 1, function(x) sqrt(x[1]^2 + x[2]^2))>1.5)
 
-# Partial RDA
+## Partial out effects of Year
+# db-RDA
+ord2 = rda(Y.p~.+Condition(W), data=X)
+
+# CCA
 ord2 = cca(Y~.+Condition(W), data=X)
+
+ord2
 anova(ord2)
 anova(ord2, by='axis')
 anova(ord2, by='term')
@@ -201,14 +298,84 @@ plot(ord2, display='sites', type='n', las=1)
 points(ord2, display='sites', pch=1, col='black', bg='lightblue')
 text(ord2, 'species', select=apply(spscores, 1, function(x) sqrt(x[1]^2 + x[2]^2))>1.5)
 
-# Each variable separately
+# Partition variance
+varpart(Y, X, as.numeric(W))
+varpart(Y.p, X, as.numeric(W))
 
+## Each variable separately
+
+# db-RDA
+ord1_byvar = lapply(env_vars, function(x) rda(Y.p~X[,x]))
+# CCA
 ord1_byvar = lapply(env_vars, function(x) cca(Y~X[,x]))
-names(ord1_byvar) = env_vars
 
+names(ord1_byvar) = env_vars
 lapply(ord1_byvar, anova)
 
-plot(ord1_byvar$Vpd_mean)
+# RDA: only working for sampXsp_thalli
+ord2_byvar = lapply(env_vars, function(x) rda(Y.p~X[,x]+Condition(W)))
+names(ord2_byvar) = env_vars
+
+# CCA: only working for sampXsp_thalli
+ord2_byvar = lapply(env_vars, function(x) cca(Y~X[,x]+Condition(W)))
+
+names(ord2_byvar) = env_vars
+lapply(ord2_byvar, anova)
+
+## Save table of variance explained 
+spord_byvar = sapply(env_vars, function(x){
+	vp = varpart(Y.p, ~X[,x], ~W)
+
+	parts = vp$part$indfract[,'Adj.R.squared']
+	names(parts) = c('Env','Shared','Site','Unexplained')
+
+	mod1 = ord1_byvar[[x]]
+	mod2 = ord2_byvar[[x]]
+	P = anova(mod1)[1,'Pr(>F)']
+	P_Site = anova(mod2)[1,'Pr(>F)']
+
+	c(parts, P=P, P_Site=P_Site)
+})
+
+write.csv(t(spord_byvar), './Analysis/Figures/db-RDA species of trait thalli varpart site env.csv', row.names=T)
+
+
+
+
+## Plot unconstrained ordination colored by tree
+ord0 = rda(Y.p)
+use_year = samples[rownames(Y),'Year']
+use_tree = samples[rownames(Y), 'TreeID']
+
+# Colored by 
+#col1 = rgb(0.941, 0.98, .804)
+#col2 = rgb(0.341, 0.427, .039)
+use_col = colorRampPalette(mycolor)(10)
+color_fact = factor(use_tree)
+
+#use_col = c('white','grey50')
+
+
+
+par(mar=c(4,4,1,1))
+
+use_ord = ord0
+ord_sum = summary(use_ord)$cont$importance
+
+ev = envfit(use_ord, X, choices=1:2)
+pcts = paste(format(ord_sum[2,1:2]*100, digits=2), '%', sep='')
+
+op = ordiplot(use_ord, c(1,2), type='n', xlab=paste('CA1 (',pcts[1], ')', sep=''), ylab=paste('CA2 (',pcts[2], ')', sep=''), las=1)
+points(op, 'sites', pch=21, bg=use_col[factor(use_tree)], cex=0.8)
+for(g in 1:10){
+	ordihull(op, groups=color_fact, kind='sd', draw='polygon', col=use_col[g], show.groups=g, alpha=50)
+	ordihull(op, groups=color_fact, kind='sd', draw='line',lwd=2, col=use_col[g], show.groups=g)
+}
+par(xpd=T)
+plot(ev, labels=xvarnames_short[colnames(X)], col='grey20', add=T, cex=0.9)#arrow.mul=3,
+par(xpd=F)
+
+
 
 
 #####################################################################################
@@ -306,7 +473,7 @@ mycol=c('black','grey50', 'grey80')
 
 for(j in env_vars){
 
-png(paste('./Analysis/Figures/species occurance prob vs ',j,'.png', sep=''), height=450, width=450)
+pdf(paste('./Analysis/Figures/species occurance prob vs ',j,'.pdf', sep=''), height=3.5, width=3.5)
 par(mar=c(4,4,1,1))
 Xrange = range(Xdata[,j])
 plot.new()
@@ -317,7 +484,7 @@ for(i in focal_taxa){
 	
 	sig = cut(modarray_single[i,j,'P'], c(0,0.05,0.1,1))
 	slope = modarray_single[i,j,'b1']>0
-	use_col = mycol[sig]
+	use_col = ifelse(i=='Usn_str', 'red', mycol[sig])
 	use_lty = mylty[ifelse(as.numeric(sig)<3, 1, 2)]
 	curve(modfunc, from=Xrange[1], to=Xrange[2], add=T, lwd=2, col=use_col, lty=use_lty)
 	
@@ -335,11 +502,6 @@ dev.off()
 #########################################################################################
 ### Vertical abundance profiles for species and genera
 library(MASS)
-
-# Calculate distance from top of tree
-samples$Height_top = sapply(1:nrow(samples), function(i){
-	trees[trees$TreeID==samples[i,'TreeID'],'Height']-samples[i,'Height']
-}) 
 
 height_cat = c(6,9,12,15,36)
 
@@ -435,12 +597,34 @@ for(i in env_vars){
 cor(heightvar, Xdata)
 
 ##########################################################
-### Diversity
+### Diversity and Meta community structure
 
-## NOT DONE YET
-## Plot taxonomic richness vs light and temp
+## NOT CURRENTLY USING
 
-sampXsp = xtabs(~SampID+TaxonID, data=use_data)
+
+library(metacom)
+
+use_comm = sampXsp_macro
+use_comm = use_comm > 0
+
+use_comm = use_comm[,colSums(use_comm)>0]
+
+comm_ord = OrderMatrix(use_comm)
+
+par(mar=c(1,5,6,1))
+image(t(comm_ord), col=c(0,1), axes=F)
+grid(ncol(comm_ord), nrow(comm_ord))
+axis(3, at=(0:(ncol(comm_ord)-1))/(ncol(comm_ord)-1), labels=colnames(comm_ord), las=2)
+axi
+
+#meta = Metacommunity(use_comm)
+
+save(meta, file='./Analysis/macro_metacomm.RData')
+
+
+
+
+## Plot taxonomic richness vs environment
 
 calc_rich = function(x, taxa){
 	these_taxa = taxa[names(x[x>0]),]
@@ -451,11 +635,43 @@ calc_rich = function(x, taxa){
 	length(sp_gen)+length(gen_nosp)
 }
 
-richness = apply(sampXsp, 1, function(x) calc_rich(x, taxa))
-richness = data.frame(richness); richness$SampID=rownames(richness)
+richness = apply(use_comm, 1, function(x) calc_rich(x, lichen_taxa))
+rich_df = data.frame(richness); rich_df$SampID=rownames(rich_df)
+rich_df = merge(rich_df, env[,c('SampID',env_vars)])
 
-env = merge(env, richness)
 
+## Model richness as a function of environment
+
+richmods = as.list(rep(NA, length(env_vars)))
+names(richmods) = env_vars
+
+for(i in env_vars){
+	richmods[[i]] = glm(richness~rich_df[,i], data=rich_df, family=poisson(link='log'))
+}
+
+# Plot models
+use_lty=c(1,2)
+use_col=c('black','grey50')
+
+pdf('./Analysis/Figures/species richness vs env all taxa.pdf', height=4, width=12)
+par(mfrow=c(1,5))
+for(i in env_vars){
+	xvar = rich_df[,i]
+	this_mod = richmods[[i]]
+	
+	plot(rich_df$richness ~ xvar, ylab='Species richness', xlab=xvarnames[i], las=1, ylim=c(0,18))
+	
+	sig = coef(summary(this_mod))[2,4] < 0.05
+
+	modfunc = function(x) exp(coef(this_mod)%*%rbind(1,x))
+
+	curve(modfunc(x), from=min(xvar), to=max(xvar), lwd=2, 
+		lty=use_lty[ifelse(sig, 1, 2)], col=use_col[ifelse(sig, 1, 2)], add=T)
+
+}
+dev.off()
+
+par(mfrow=c())
 plot(richness~Light_mean_sum, data=env)
 plot(richness~Temp_mean_sum, data=env)
 
