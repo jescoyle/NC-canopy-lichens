@@ -257,6 +257,8 @@ ord1 = rda(Y.p~., data=X)
 ord1 = cca(Y~., data=X)
 
 anova(ord1) # Test significance of whole model
+RsquareAdj(ord1) # Variance explained
+
 anova(ord1, by='axis')
 anova(ord1, by='term')
 
@@ -311,6 +313,7 @@ ord1_byvar = lapply(env_vars, function(x) cca(Y~X[,x]))
 
 names(ord1_byvar) = env_vars
 lapply(ord1_byvar, anova)
+lapply(ord1_byvar, RsquareAdj)
 
 # RDA: only working for sampXsp_thalli
 ord2_byvar = lapply(env_vars, function(x) rda(Y.p~X[,x]+Condition(W)))
@@ -318,9 +321,9 @@ names(ord2_byvar) = env_vars
 
 # CCA: only working for sampXsp_thalli
 ord2_byvar = lapply(env_vars, function(x) cca(Y~X[,x]+Condition(W)))
-
 names(ord2_byvar) = env_vars
 lapply(ord2_byvar, anova)
+lapply(ord1_byvar, RsquareAdj)
 
 ## Save table of variance explained 
 spord_byvar = sapply(env_vars, function(x){
@@ -339,7 +342,12 @@ spord_byvar = sapply(env_vars, function(x){
 
 write.csv(t(spord_byvar), './Analysis/Figures/db-RDA species of trait thalli varpart site env.csv', row.names=T)
 
-
+# RDA by variable for samples in Duke Forest only
+ord2_byvar = lapply(env_vars, function(x) rda(Y.p~X[,x]))
+names(ord2_byvar) = env_vars
+lapply(ord2_byvar, RsquareAdj)
+lapply(ord2_byvar, anova)
+RsquareAdj(ord1)
 
 
 ## Plot unconstrained ordination colored by tree

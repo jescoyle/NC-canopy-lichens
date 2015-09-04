@@ -88,8 +88,6 @@ loggers = read.csv(paste(logger_data_dir, 'all_logger_data.csv', sep=''))
 ### Remove observations during times when data loggers were not deployed at sample locations
 
 ### Note that DST is GMT+4 and EST is GMT+5, contrary to normal convention
-#### TIME ZONE CONVERSIONS MAY NOT HAVE WORKED PROPERLY
-#### MAY NEED TO REDO AND THEN RE-UPLOAD DATA TO SQLITE DATABASE
 good_loggers = data.frame()
 for(i in 1:72){
 
