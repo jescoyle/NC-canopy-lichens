@@ -449,6 +449,15 @@ Nobs = sapply(rownames(traitnames), function(x){
 
 write.csv(Nobs, './Analysis/Figures/number of trait measures for each genus.csv')
 
+# Number of observation of each trait for each species
+Nobs_sp = sapply(use_traits[1:7], function(x){
+	tapply(use_data[,x], use_data$TaxonID, function(y) sum(!is.na(y)))
+})
+
+rownames(Nobs_sp) = paste(taxa[rownames(Nobs_sp),'Genus'], taxa[rownames(Nobs_sp),'Species'])
+
+write.csv(Nobs_sp, './Analysis/Figures/number of trait measured for each species.csv')
+
 # NOT DONE YET:  Wilcox rank-sum test for differences among pairs in ordinal data
 diff_pairs_ord = sapply(rownames(subset(traitnames, mode=='O')), function(x){
 	WT = pairwise.wilcox.test(as.numeric(use_data[,x]), use_data$Genus, p.adjust.method='hochberg', exact=F)$p.value
@@ -466,11 +475,16 @@ for( i in use_traits) {
 	par(mar=c(8,5,1,3))
 	meds = tapply(use_data[,i], use_data$Genus, median, na.rm=T)
 	plotorder = names(meds)[order(meds)]
+	
+	plotlabel1 = traitnames[i,'exprName']
+	plotlabel2 = paste('(',traitnames[i,'units'],')', sep='')
+	ylab = ifelse(plotlabel2=='()', parse(text=plotlabel1), parse(text=paste(plotlabel1, plotlabel2, sep='~~')))
+	
 	boxplot(use_data[,i]~factor(use_data$Genus, levels=plotorder), 
-		las=3, ylab=traitnames[i,'displayName'], 
+		las=3, ylab=ylab, 
 		lwd=1, pt.lwd=1, varwidth=T)
 	axis(4)
-
+	
 	# Kruskal-Wallis Test
 	kwtest = kruskal.test(use_data[,i], factor(use_data$Genus))
 	chi2 = kwtest$statistic
@@ -497,7 +511,6 @@ trait_kw_parm = sapply(use_traits, function(i){
 })
 trait_kw_parm = t(trait_kw_parm)
 
-
 # Compare trait means across Parmotrema species
 DTK_tests_parm = sapply(use_traits, function(x){
 	this_data = subset(parm_data, !is.na(parm_data[,x])) # remove missing values
@@ -511,6 +524,35 @@ DTK_tests_parm = sapply(use_traits, function(x){
 diff_pairs_parm = sapply(use_traits, function(x){
 	names(which(apply(DTK_tests_parm[[x]][,2:3], 1, prod)>0))
 })
+
+pdf('./Analysis/Figures/trait distributions by Parmotrema species boxplot.pdf', height=5.5, width=4)
+for( i in use_traits) {
+	
+	par(mar=c(5,5,1,3))
+	meds = tapply(parm_data[,i], parm_data$TaxonID, median, na.rm=T)
+	plotorder = names(meds)[order(meds)]
+	
+	plotlabel1 = traitnames[i,'exprName']
+	plotlabel2 = paste('(',traitnames[i,'units'],')', sep='')
+	ylab = ifelse(plotlabel2=='()', parse(text=plotlabel1), parse(text=paste(plotlabel1, plotlabel2, sep='~~')))
+	
+	boxplot(parm_data[,i]~factor(parm_data$TaxonID, levels=plotorder), 
+		las=3, ylab=ylab, 
+		lwd=1, pt.lwd=1, varwidth=T)
+	axis(4)
+	
+	# Kruskal-Wallis Test
+	kwtest = kruskal.test(parm_data[,i], factor(parm_data$TaxonID))
+	chi2 = kwtest$statistic
+	pval = kwtest$p.value
+
+	usr = par('usr')
+	this_text = substitute(Chi^2==c~~P==p, list(c = format(chi2, digits=3), p = format(pval, scientific=T, digits=2)))
+	text(usr[1], usr[4], this_text, srt=90, adj=c(1.1,1.1))
+
+}
+dev.off()
+
 
 # Number of observations of each trait for each genus
 Nobs_parm = sapply(rownames(traitnames), function(x){
@@ -638,7 +680,7 @@ for(j in env_vars){
 	genus_ests[i,j,rownames(g_ests),c('low95','up95')] = g_ints
 }}
 
-save(modlist, parm_ests, genus_ests, file='./Analysis/REML single variable FT models no Usnea.RData')
+#save(modlist, parm_ests, genus_ests, file='./Analysis/REML single variable FT models no Usnea.RData')
 load('./Analysis/REML single variable FT models.RData')
 load('./Analysis/REML single variable FT models no Usnea.RData')
 
@@ -691,6 +733,89 @@ legend('right', genera, col=use_col, lwd=2, bty='n')
 }
 dev.off()
 
+
+# Only plot the two that differ: WHC ~ Mean light and CHLTOT ~ Mean light
+pdf('./Analysis/Figures/trait-env relationship by genus only sig.pdf', height=3, width=6)
+layout(t(matrix(1:3)), widths=c(0.4,0.4,0.2))
+par(mar=c(4,4,1,1))
+for(i in c('Water_capacity', 'Tot_chl_DW')){
+
+	plotlabel1 = traitnames[i,'exprName']
+	plotlabel2 = paste('(',traitnames[i,'units'],')', sep='')
+	ylab = ifelse(plotlabel2=='()', parse(text=plotlabel1), parse(text=paste(plotlabel1, plotlabel2, sep='~~')))
+	
+
+	plot(use_data[,c('Light_mean',i)], las=1, xlab=xvarnames['Light_mean'], ylab=ylab,
+		pch=21, bg=use_col[factor(use_data$Genus)], cex=.8)
+	
+	for(g in genera){
+		this_data = subset(model_data, Genus==g)
+		xvar = this_data[,'Light_mean']
+		yvar = this_data[,i] 
+		if(length(yvar[!is.na(yvar)]) > 3){
+			this_mod = lm(yvar~xvar)
+			this_func = function(x){
+				new_x = x*xvar_factor['Light_mean']
+				y = exp(predict(this_mod, data.frame(xvar=new_x)))
+				if(i=='Cortex_thickness') y = y+1
+				y
+			}
+	
+			sig = anova(this_mod)[1,'Pr(>F)']<0.05			
+			use_lwd = ifelse(sig, 2, 1)
+			use_lty = ifelse(sig, 1, 2)
+
+			curve(this_func, from=min(xvar)/xvar_factor['Light_mean'], to=max(xvar)/xvar_factor['Light_mean'], add=T,
+				lwd=use_lwd, lty=use_lty, col=use_col[g])
+		}
+	}
+}
+plot.new()
+par(mar=c(4,1,1,1))
+legend('right', genera, col=use_col, lwd=2, bty='n')
+dev.off()
+
+## Make table of separate means model coefficients
+sepgen_mods = array(NA, dim=c(length(use_traits), length(env_vars), length(genera)+1, 4), 
+	dimnames=list(Trait=use_traits, Predictor=env_vars, Genus=c('All',genera), Statistic=c('b0','b1','F','P')))
+
+for(i in use_traits){
+for(j in env_vars){
+for(g in genera){
+	this_data = subset(model_data, Genus==g)
+	xvar = scale(this_data[,j], center=T, scale=F) # so we can compare coefs
+	yvar = this_data[,i] 
+	
+	if(length(yvar[!is.na(yvar)]) > 3){
+		this_mod = lm(yvar~xvar)
+		sepgen_mods[i,j,g,'F'] = anova(this_mod)[1,'F value']	
+		sepgen_mods[i,j,g,'P'] = anova(this_mod)[1,'Pr(>F)']
+		sepgen_mods[i,j,g,c('b0','b1')] = coef(this_mod)			
+	}
+}
+	
+	yvar = scale(model_data[,j], center=T, scale=F)
+	xvar = model_data[,i]
+
+	this_mod = lm(yvar~xvar)
+	sepgen_mods[i,j,'All','F'] = anova(this_mod)[1,'F value']	
+	sepgen_mods[i,j,'All','P'] = anova(this_mod)[1,'Pr(>F)']
+	sepgen_mods[i,j,'All',c('b0','b1')] = coef(this_mod)
+
+}}
+
+# b0 gives genus means, b1 gives slopes
+sepgen_melt = melt(sepgen_mods)
+gen_pvals = cast(sepgen_melt, Trait+Predictor~Genus, subset=Statistic=='P')
+gen_slopes = cast(sepgen_melt, Trait+Predictor~Genus, subset=Statistic=='b1')
+write.csv(cbind(gen_slopes, gen_pvals), './Analysis/Figures/trait env models by genus slopes and pvals.csv', row.names=F)
+
+# Write out parameter estimates from models
+names(dimnames(parm_ests)) = c('Trait','Predictor','Statistic','Value')
+parm_melt = melt(parm_ests)
+parm_df = cast(parm_melt, Trait+Predictor~Statistic, subset=Value=='est')
+write.csv(parm_df, './Analysis/Figures/individual trait models parameter estimates.csv' ,row.names=F)
+
 # Based on these figure it is probably not necessary to fit a random slopes model.
 # Also, there isn't enough data across levels to fit a random slopes model (we get cor=-1 between slope and intercept)
 i = 'WHC'
@@ -698,7 +823,7 @@ j = 'Vpd_mean'
 
 yvar = scale(model_data[,i], center=T, scale=F) # center response so that we can estimate random slopes
 lme0 = lmer(yvar ~ model_data[,j] + (1|Genus), data=model_data, REML=T)
-lme1 = lmer(yvar ~ model_data[,j] + (0+model_data[,j]|Genus), data=model_data, REML=T)
+lme1 = lmer(yvar ~ model_data[,j] + (model_data[,j]|Genus), data=model_data, REML=T)
 lme2 = lmer(yvar ~ model_data[,j] + (1|Genus) + (1|SampID), data=model_data, REML=T)
 AIC(lme0, lme1, lme2)
 VarCorr(lme1)
@@ -754,12 +879,12 @@ plot_traits = use_traits[1:7]
 
 for(j in env_vars){
 
-pdf(paste('./Analysis/Figures/variance components',j,'models no Usnea.pdf'), height=8, width=6)
-varcomp = parm_ests[plot_traits,j,c('sigma.env','sigma.samp','sigma.genus','sigma.res'),]
+pdf(paste('./Analysis/Figures/variance components',j,'models.pdf'), height=8, width=6)
+varcomp = parm_ests[plot_traits,j,c('sigma.res','sigma.samp','sigma.genus','sigma.env'),]
 plot_data = t(varcomp[,,'est'])
 #pcols = c('transparent','black')[plot_data>0]
 colnames(plot_data) = traitnames[plot_traits,'labelName']
-dotchart(plot_data, las=2, labels=c('Environment','Sample','Genus','Residual'), xlim=c(0, max(varcomp)), pch=16)
+dotchart(plot_data, las=2, labels=c('Residual','Sample','Genus','Environment'), xlim=c(0, max(varcomp)), pch=16)
 xvals = as.numeric(matrix(1:(6*length(use_traits)), nrow=6)[1:4,])
 segments(t(varcomp[length(plot_traits):1,,'low95']),xvals,t(varcomp[length(plot_traits):1,,'up95']),xvals)
 mtext(expression(sigma^2), 1, 2)
@@ -780,6 +905,92 @@ mtext(expression(sigma^2), 1, 3, cex=1.5)
 dev.off()
 
 parm_ests[,,'sigma.env','est'] = parm_ests[,,'sigma.env','est']^2
+
+## Plot Variance components figure used in manuscript (Fig 2)
+for(i in env_vars){
+
+varcomp = parm_ests[dim(parm_ests)[1]:1, i,c('sigma.res','sigma.samp','sigma.env','sigma.genus'),]
+ests = varcomp[,,'est']
+varcomp[ests==0] = NA # removes data for variance components that could not be estimated
+ests = t(varcomp[,,'est'])
+low95 = t(varcomp[,,'low95'])
+up95 = t(varcomp[,,'up95'])
+ests = rbind(ests, rep(NA, ncol(ests)))
+low95 = rbind(low95, rep(NA, ncol(low95)))
+up95 = rbind(up95, rep(NA, ncol(up95)))
+yvals = (1:length(ests))-0.5
+
+pdf(paste('./Analysis/Figures/variance components', i,'models.pdf'), height=7, width=6)
+layout(matrix(1:2, nrow=1), widths=c(0.6, 0.4))
+par(oma=c(0,2,0,2))
+par(mar=c(3,0,3,0))
+plot.new()
+plot.window(ylim=c(0,length(ests)), xlim=c(0,1))
+axis(2, at=yvals, labels=rep(c('Residual','Sample','Environment','Genus',''), ncol(ests)), las=1,
+	tick=F, line=0, col=0, pos=1)
+trait_text = rep(traitnames[colnames(ests),'exprName'], each=nrow(ests))
+trait_text[!(1:length(ests) %in% seq(nrow(ests),length(ests),nrow(ests)))] = NA
+for(i in 1:length(trait_text)) text(0.5, i-1.5, parse(text=trait_text[i]), pos=2, font=2)
+abline(h=seq(0,length(ests),nrow(ests))-.5)
+
+plot.new()
+plot.window(ylim=c(0,length(ests)), xlim=c(0,max(up95, na.rm=T)))
+abline(h=yvals, col='grey50', lty=3)
+abline(h=seq(0,length(ests),nrow(ests))-.5)
+segments(low95,yvals,up95,yvals, lend=1, lwd=3)
+points(ests, yvals, pch=21, bg='white')
+axis(1, pos=-.5, las=1)
+mtext(expression(sigma^2), 1, 2, cex=1.5)
+dev.off()
+
+}
+
+# Option 2: different scales for each trait
+for(i in env_vars){
+
+varcomp = parm_ests[dim(parm_ests)[1]:1, i,c('sigma.res','sigma.samp','sigma.env','sigma.genus'),]
+ests = varcomp[,,'est']
+varcomp[ests==0] = NA # removes data for variance components that could not be estimated
+ests = t(varcomp[,,'est'])
+low95 = t(varcomp[,,'low95'])
+up95 = t(varcomp[,,'up95'])
+ests = rbind(ests, rep(NA, ncol(ests)))
+low95 = rbind(low95, rep(NA, ncol(low95)))
+up95 = rbind(up95, rep(NA, ncol(up95)))
+yvals = (1:nrow(ests))-0.5
+
+pdf(paste('./Analysis/Figures/variance components', i,'models no Usnea v2.pdf'), height=7, width=6)
+layout(matrix((2*ncol(ests)):1, nrow=ncol(ests), byrow=T)[,2:1], widths=c(0.6, 0.4))
+par(oma=c(2,0,0,2))
+par(mar=c(2,0,0,0))
+
+for(j in colnames(ests)){
+plot.new()
+plot.window(ylim=c(-.5,nrow(ests)), xlim=c(0,1))
+axis(2, at=yvals, labels=c('Residual','Sample','Environment','Genus',''), las=1,
+	tick=F, line=0, col=0, pos=1.05)
+trait_text = traitnames[j,'exprName']
+text(0.7, nrow(ests)-1.5, parse(text=trait_text), pos=2, font=2)
+segments(.3, c(0,nrow(ests))-.5, 1.1, c(0,nrow(ests))-.5)
+
+plot.new()
+plot.window(ylim=c(-.5,nrow(ests)), xlim=c(0,max(up95[,j], na.rm=T)))
+abline(h=yvals, col='grey50', lty=3)
+abline(h=c(0,nrow(ests))-.5)
+segments(low95[,j], yvals, up95[,j], yvals, lend=1, lwd=3)
+points(ests[,j], yvals, pch=21, bg='white',cex=1.5)
+axis(1, pos=-.5, las=1)
+if(j==colnames(ests)[1]) mtext(expression(paste('Estimated Variance ',(sigma^2))), 1, 2.5, cex=.8)
+}
+
+dev.off()
+
+}
+
+
+
+
+
 
 ## Plot estimated random effects for each genus
 # From models of Light_mean
@@ -855,6 +1066,30 @@ load('./Analysis/REML single variable FT models with site effects.RData')
 
 # Compare site effects across models
 parm_ests_site[,,'site',]
+
+## Make plot of estimated effects with and without controlling for site
+
+xvar_levels = factor(env_vars)
+
+pdf('./Analysis/Figures/REML single variable model effects compare site.pdf', height=9, width=4)
+layout(matrix(1:length(use_traits), ncol=1))
+par(mar=c(2,13,2,.5))
+for(i in use_traits){
+	this_data = parm_ests[i,,'b1',]
+	xrange = range(this_data)
+	plot(as.numeric(xvar_levels)~this_data[,'est'], xlim=xrange, axes=F, 
+		xlab='', ylab='', lwd=1)
+	abline(v=0, col='grey50', lty=2)
+	segments(this_data[, 'low95'], as.numeric(xvar_levels), 
+		this_data[, 'up95'], as.numeric(xvar_levels), lwd=1)
+	axis(1)
+	axis(2, at=1:length(env_vars), labels=xvarnames[xvar_levels], las=1)
+	mtext(traitnames[i,'displayName'], 3, 0)
+	box()
+}
+dev.off()
+
+
 
 
 ## Make panel plot of model predictions with and without site effects
@@ -1012,6 +1247,7 @@ source('./Analysis/Leps2011_trait_functions.R')
 ## Run code at the beginning of the previous section to get model_data with transformed traits
 ## note: we are not used scaled traits- those are only for multi-trait RDA 
 
+use_traits = c('Water_capacity','Thallus_thickness','STA','Cortex_thickness','Rhizine_length','Tot_chl_DW','Chla2b')
 
 ## Calculate genus-level mean traits
 gen_means = aggregate(model_data[,use_traits], list(Genus=model_data$Genus), FUN=function(x) mean(x, na.rm=T))
@@ -1085,7 +1321,8 @@ ISV_traits = SA_traits - FA_traits
 ISV_traits_gen = SA_traits - FA_traits_gen
 
 # Save trait means
-save(SA_traits, FA_traits, ISV_traits, FA_traits_gen, ISV_traits_gen, file='./Analysis/sample mean traits.RData')
+#save(SA_traits, FA_traits, ISV_traits, FA_traits_gen, ISV_traits_gen, file='./Analysis/sample mean traits.RData')
+load('./Analysis/sample mean traits.RData')
 
 # Check distributions
 layout(matrix(1:(3*length(use_traits)), nrow=3, byrow=F))
@@ -1234,6 +1471,7 @@ dev.off()
 
 # Decomposition of environmental model
 # All env variables
+j='Water_capacity'
 aov_env = trait.flex.anova(~., specif.avg=SA_traits[,j], const.avg=FA_traits[,j], data=Xdata)
 
 # Each variable separately
@@ -1282,19 +1520,19 @@ write.csv(totSS_tab, './Analysis/Figures/Total SS trait decomposition no Usnea.c
 # use aovSS_site and effects_array_site for models with site
 
 use_tab = cast(aovSS_melt, Trait+Predictor~Statistic, subset=Component=='Total'&Statistic=='Var')
-props = aovSS_site[,,c('Interspecific','Intraspecific','Total'),'Var'] / aovSS_array[,,c('Interspecific','Intraspecific','Total'),'Tot']
+props = aovSS_array[,,c('Interspecific','Intraspecific','Total'),'Var'] / aovSS_array[,,c('Interspecific','Intraspecific','Total'),'Tot']
 props_mat = cast(melt(props), Trait+Predictor~Component)
 
-props_sig = aovSS_site[,,c('Interspecific','Intraspecific','Total'),'P']
+props_sig = aovSS_array[,,c('Interspecific','Intraspecific','Total'),'P']
 props_sig_mat = cast(melt(props_sig), Trait+Predictor~Component)
 props_sig_mat[,3:5] = props_sig_mat[,3:5] < 0.05
 
-effsign = cast(melt(effects_array_site), Trait+Predictor~Component)
+effsign = cast(melt(effects_array), Trait+Predictor~Component)
 effsign[,3:5] = effsign[,3:5]>0
 
 image(t(as.matrix(props_mat[,c('Interspecific','Intraspecific','Total')])))
 
-barcols = c('grey80','black')
+barcols = c('grey70','black')
 signsymbs = c('-','+')
 
 plot_props = props_mat
@@ -1345,6 +1583,77 @@ axis(1, line=-1, las=3)
 mtext('Interspecific', 3, 0, cex=.8)
 dev.off()
 
+## Make smaller version of figure used in manuscript (Figure 4)
+library(R.utils)
+
+bestvars = apply(aovSS_array[,,'Total','Var'], 1, function(x) which(x==max(x)))
+aovSS_best = sapply(use_traits, function(i) aovSS_array[i,bestvars[i],,], simplify='array')
+names(dimnames(aovSS_best))[3] = 'Trait'
+props = aovSS_best[c('Interspecific','Intraspecific','Total'),'Var',] / aovSS_best[c('Interspecific','Intraspecific','Total'),'Tot',]
+props_mat = cast(melt(props), Trait~Component)
+props_mat$Predictor = dimnames(aovSS_array)$Predictor[bestvars[as.character(props_mat$Trait)]]
+rownames(props_mat) = props_mat$Trait
+props_mat = props_mat[use_traits[7:1],]
+
+props_sig = aovSS_best[c('Interspecific','Intraspecific','Total'),'P',]
+props_sig_mat = cast(melt(props_sig), Trait~Component)
+props_sig_mat[,2:4] = props_sig_mat[,2:4] < 0.05
+rownames(props_sig_mat) = props_sig_mat$Trait
+props_sig_mat = props_sig_mat[use_traits[7:1],]
+
+effects_best = sapply(use_traits, function(i) effects_array[i,bestvars[i],], simplify='array')
+effsign = t(effects_best)>0
+effsign = effsign[as.character(props_mat$Trait),]
+effsign = effsign[use_traits[7:1],]
+
+plot_props = props_mat
+
+pdf('./Analysis/Figures/Sample mean trait variance explained by best env predictors site.pdf', height=2, width=7)
+
+# Set up plot layout: 4 columns
+layout(matrix(1:4, nrow=1), widths=c(0.4, 0.2, 0.2, 0.2))
+par(oma=c(0,2,0,2))
+par(mar=c(3,0,3,0.5))
+plot.new()
+plot.window(ylim=c(0,nrow(plot_props)), xlim=c(0,1))
+
+# Add y-axis labels in 1st plot
+lab1 = parse(text=traitnames[as.character(plot_props$Trait),'exprName']) # Trait names
+lab2 = xvarnames_short[as.character(plot_props$Predictor)] # Predictors
+N = nrow(plot_props)
+yvals = (1:N)-0.5 # locations to put labels
+mtext('Predictor', 3, 0, adj=1, cex=0.8)
+axis(2, at=yvals, labels=lab2, las=1,
+	tick=F, col=0, pos=1.1)
+mtext('Trait', 3, 0, adj=0.4, cex=0.8)
+text(0.65, yvals, parse(text=lab1), pos=2, font=2)
+
+for(comp in c('Total','Intraspecific','Interspecific')){
+	# Set up plot window
+	plot.new()
+	plot.window(ylim=c(0,nrow(plot_props)), xlim=c(0,1))
+	
+	# Add lines dividing bars
+	abline(h=0:N, col='grey70',lty=3, lwd=.8, lend=2)
+	
+	# Add rectangles for variance explained
+	rect(0, 0:(N-1), plot_props[,comp], 1:N, col=barcols[props_sig_mat[,comp]+1], border=NA)
+	
+	# Add symbol for direction of effect
+	signtext = signsymbs[effsign[,comp]+1]
+	signtext[!props_sig_mat[,comp]] = NA
+	text(plot_props[,comp]+.1, yvals, signtext)
+
+	# Add x-axis and title
+	axis(1, line=0, las=2, srt=180)
+	mtext(comp, 3, 0, cex=.8)
+}
+
+dev.off()
+
+
+
+
 # Each variable separately controlling for site
 aov_env_site = vector('list', length(use_traits)*length(env_vars))
 dim(aov_env_site) = c(length(use_traits),length(env_vars))
@@ -1379,6 +1688,13 @@ for(j in env_vars){
 }}
 
 # Use code above to make plot
+
+
+## An abbreviated version of the figure above using on the most imporant env predictor for each trait
+
+
+
+
 
 
 
@@ -1434,7 +1750,7 @@ sp_means[gen_only,use_traits] = gen_means[taxa[gen_only,'Genus'],use_traits]
 ## Unconstrained ordination of thalli to identify primary covarition of traits
 ## Followed by fitting env variables
 
-# Impute missing trait values from species-level means (this may biase toward and effect of genus)
+# Impute missing trait values from species-level means (this may bias toward and effect of genus)
 Ydata = scaled_data[,use_traits]
 for(i in use_traits){
 	missing = is.na(Ydata[,i]) # Find missing data

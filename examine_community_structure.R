@@ -481,6 +481,7 @@ mycol=c('black','grey50', 'grey80')
 
 for(j in env_vars){
 
+#svg(paste('./Analysis/Figures/species occurance prob vs ',j,'.svg', sep=''), height=3.5, width=3.5)
 pdf(paste('./Analysis/Figures/species occurance prob vs ',j,'.pdf', sep=''), height=3.5, width=3.5)
 par(mar=c(4,4,1,1))
 Xrange = range(Xdata[,j])
