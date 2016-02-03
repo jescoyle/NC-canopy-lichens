@@ -4,7 +4,7 @@ options(stringsAsFactors=F)
 working_dir = 'C:/Users/jrcoyle/Documents/UNC/Projects/Canopy Functional Traits/'
 sql_dir = 'C:/Users/jrcoyle/Documents/UNC/Projects/Canopy Functional Traits/Data/SQLite Tables/'
 data_dir = 'C:/Users/jrcoyle/Documents/UNC/Projects/Canopy Functional Traits/Data/Derived Tables/'
-script_dir = 'C:/Users/jrcoyle/Documents/UNC/Projects/Canopy Functional Traits/Analysis/GitHub/NC-canopy-lichens/'
+script_dir = 'C:/Users/jrcoyle/Documents/UNC/Projects/Canopy Functional Traits/Analysis/GitHub/NC-canopy-lichens/Code/'
 
 setwd(working_dir)
 
@@ -1002,6 +1002,9 @@ dev.off()
 ## Multi-panel plot of model predictions with and without site effects
 ## Manuscript Figure 1.
 
+# Make vector for converting predictors in model data back to original scale for plotting
+xvar_factor = c(0.001, 100, 1, 1, 100); names(xvar_factor) = env_vars
+
 # A function that fits the mean line for the models without site effects
 modline = function(x, i, j){
 	y = parm_ests[i,j,'b0','est'] + parm_ests[i,j,'b1','est']*(x*xvar_factor[j])
@@ -1020,9 +1023,9 @@ modline_site = function(x, i, j, year){
 
 use_col = c('white','grey70')
 
-svg('./Analysis/Figures/compare site effects vpd_mean.svg', height=5.5, width=4)
+svg('./Analysis/Figures/compare site effects vpd_mean.svg', height=5.5, width=4.5)
 par(mfrow=c(3,2))
-par(mar=c(2,4,1,1))
+par(mar=c(2,4.4,1,1))
 par(lend=2)
 for(i in c('Water_capacity','STA','Rhizine_length','Cortex_thickness','Tot_chl_DW','Chla2b')){
 
@@ -1102,8 +1105,6 @@ dev.off()
 genera = levels(factor(model_data$Genus))
 use_col = colorRampPalette(mycolor)(length(genera)); names(use_col) = genera
 
-# Make vector for converting predictors in model data back to original scale for plotting
-xvar_factor = c(0.001, 100, 1, 1, 100); names(xvar_factor) = env_vars
 
 pdf('./Analysis/Figures/trait-env relationships by genus.pdf', height=6, width=8)
 par(mfrow=c(2,3))
