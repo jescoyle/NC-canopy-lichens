@@ -163,6 +163,13 @@ save(sp_list, sampXsp, sampXsp_macro, sampXsp_crust, sampXsp_thalli, sampXsp_fol
 load('./Data/Derived Tables/sampXsp_matrices.RData')
 
 
+### Plot species rank - frequency for trait thalli vs community samples in Duke Forest T3 - T10
+
+trait_freq = colSums(sampXsp_thalli[rownames(sampXsp_macro),])
+comm_freq = colSums(sampXsp_macro)
+
+comm_freq[trait_freq==0]
+
 
 #########################################################################################
 ### Ordination

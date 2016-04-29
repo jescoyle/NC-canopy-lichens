@@ -110,9 +110,31 @@ use_data[use_data$Genus=='Usnea','Rhizine_length'] = NA # Usnea don't have rhizi
 use_data$WHC = use_data$Water_capacity/use_data$STA
 use_data$STM = 1/use_data$STA
 
-with(use_data, plot(WHC~STM, col=(1:2)[factor(Growth_form)], pch=16)) # expected 1:1
-abline(0,1); abline(0,2); abline(0,3); abline(0,.5)
-outs = subset(use_data, WHC>(1.5*STM))
+# Plot WHC vs STM
+use_genera = names(table(use_data$Genus))[table(use_data$Genus)>5]
+use_col = colorRampPalette(mycolor)(length(use_genera))
+
+pdf('./Analysis/Figures/WHC vs STM by genus.pdf', height=5, width=5)
+par(mar=c(4,4,1,1))
+plot(WHC~STM, type='n', data=use_data, las=1, ylab=expression(WHC[A]), xlim=c(0,75), ylim=c(0,75))
+abline(0,1)
+for(i in 1:length(use_genera)){
+	g = use_genera[i]
+	these_data = subset(use_data, Genus==g)
+	points(WHC~STM, data=these_data, bg=use_col[i], pch=21)
+	use_mod = lm(WHC~STM, data=these_data)
+	mod_func = function(x) predict(use_mod, data.frame(STM=x))
+	curve(mod_func, from=min(these_data$STM, na.rm=T), to=max(these_data$STM, na.rm=T), add=T, col=use_col[i], lwd=2)
+}
+legend('bottomright', use_genera, lwd=2, col=use_col, bty='n')
+dev.off()
+
+colorby = cut(use_data$Area, breaks=100, include.lowest=T)
+use_col = rainbow(100)
+plot(WHC~STM, data=use_data, las=1, ylab=expression(WHC[A]), xlim=c(0,75), ylim=c(0,75), pch=16, col=use_col[colorby])
+
+plot(Water_capacity ~ WHC, data=use_data)
+
 
 use_traits = c('Water_capacity','WHC','Thallus_thickness','STA','STM','Cortex_thickness','Rhizine_length','Tot_chl_DW','Chla2b')
 model_data = use_data[,c(use_traits, env_vars, 'Genus','SampID','Year')]
@@ -682,11 +704,13 @@ for(j in env_vars){
 
 # Save models 
 #save(modlist, parm_ests, genus_ests, file='./Analysis/REML single variable FT models no Usnea.RData')
+#save(modlist, parm_ests, genus_ests, file='./Analysis/REML single variable FT models with WHC STM.RData')
+
 
 # Load previously saved models
 load('./Analysis/REML single variable FT models.RData')
 load('./Analysis/REML single variable FT models no Usnea.RData')
-
+load('./Analysis/REML single variable FT models with WHC STM.RData')
 
 ## Plot estimated fixed effects
 library(reshape)
@@ -713,8 +737,10 @@ for(i in use_traits){
 dev.off()
 
 # Compare Mass and Area specific WHC
-par(mfrow=c(1,2))
-for(i in c('Water_capacity','WHC')){
+pdf('./Analysis/Figures/REML single variable model effects compare water capacity.pdf', height=7, width=4)
+layout(matrix(1:4, ncol=1))
+par(mar=c(2,13,2,.5))
+for(i in c('Water_capacity','WHC','STA','STM')){
 	this_data = parm_ests[i,,'b1',]
 	xrange = range(this_data)
 	plot(as.numeric(xvar_levels)~this_data[,'est'], xlim=xrange, axes=F, 
@@ -727,6 +753,7 @@ for(i in c('Water_capacity','WHC')){
 	mtext(traitnames[i,'displayName'], 3, 0)
 	box()
 }
+dev.off()
 
 
 ## Plot variance components (one chart for each predictor variable)
@@ -827,6 +854,48 @@ dev.off()
 
 }
 
+# Compare water capacity measured
+wtraits = c('Water_capacity','WHC')#,'STA','STM')
+
+varcomp = parm_ests[wtraits, 'Vpd_mean',c('sigma.res','sigma.samp','sigma.env','sigma.genus'),]
+ests = varcomp[,,'est']
+varcomp[ests==0] = NA # removes data for variance components that could not be estimated
+ests = t(varcomp[,,'est'])
+low95 = t(varcomp[,,'low95'])
+up95 = t(varcomp[,,'up95'])
+ests = rbind(ests, rep(NA, ncol(ests)))
+low95 = rbind(low95, rep(NA, ncol(low95)))
+up95 = rbind(up95, rep(NA, ncol(up95)))
+yvals = (1:nrow(ests))-0.5
+
+pdf(paste('./Analysis/Figures/variance components Vpd_mean models compare water capacity.pdf'), height=3, width=6)
+layout(matrix((2*ncol(ests)):1, nrow=ncol(ests), byrow=T)[,2:1], widths=c(0.6, 0.4))
+par(oma=c(2,0,0,2))
+par(mar=c(2,0,0,0))
+
+for(j in colnames(ests)){
+plot.new()
+plot.window(ylim=c(-.5,nrow(ests)), xlim=c(0,1))
+axis(2, at=yvals, labels=c('Residual','Sample','Environment','Genus',''), las=1,
+	tick=F, line=0, col=0, pos=1.05)
+trait_text = traitnames[j,'exprName']
+text(0.7, nrow(ests)-1.5, parse(text=trait_text), pos=2, font=2)
+segments(.3, c(0,nrow(ests))-.5, 1.1, c(0,nrow(ests))-.5)
+
+plot.new()
+plot.window(ylim=c(-.5,nrow(ests)), xlim=c(0,max(up95[,j], na.rm=T)))
+abline(h=yvals, col='grey50', lty=3)
+abline(h=c(0,nrow(ests))-.5)
+segments(low95[,j], yvals, up95[,j], yvals, lend=1, lwd=3)
+points(ests[,j], yvals, pch=21, bg='white',cex=1.5)
+axis(1, pos=-.5, las=1)
+if(j==colnames(ests)[1]) mtext(expression(paste('Estimated Variance ',(sigma^2))), 1, 2.5, cex=.8)
+}
+
+dev.off()
+
+
+
 ## Plot estimated random effects for each genus
 # From models of Light_mean
 j = 'Light_mean'
@@ -895,10 +964,12 @@ for(j in env_vars){
 
 # Save models
 #save(modlist_site, parm_ests_site, genus_ests_site, file='./Analysis/REML single variable FT models with site effects.RData')
+#save(modlist_site, parm_ests_site, genus_ests_site, file='./Analysis/REML single variable FT models with site effects with WHC STM.RData')
+
 
 # Load previously saved models
-load('./Analysis/REML single variable FT models with site effects.RData')
-
+#load('./Analysis/REML single variable FT models with site effects.RData')
+load('./Analysis/REML single variable FT models with site effects with WHC STM.RData')
 
 # Compare site effects across models
 parm_ests_site[,,'site',]
@@ -1028,6 +1099,48 @@ par(mfrow=c(3,2))
 par(mar=c(2,4.4,1,1))
 par(lend=2)
 for(i in c('Water_capacity','STA','Rhizine_length','Cortex_thickness','Tot_chl_DW','Chla2b')){
+
+	this_unit = parse(text=traitnames[i,'units'])
+	this_traitname = parse(text=traitnames[i,'exprName'])
+	this_lab = ifelse(length(this_unit)>0, parse(text=paste(this_traitname,'~~(',this_unit,')', sep='')), this_traitname)
+	
+	plot(use_data[,i]~use_data$Vpd_mean, pch=21, bg=use_col[factor(use_data$Year)],las=1, 
+		ylab=this_lab, xlab='', axes=F)
+	
+	# Significance of fixed effects slopes
+	this_mod = modlist[i,'Vpd_mean'][[1]]
+	drop_mod = update(this_mod, .~.-model_data[, j])
+	pval1 = anova(this_mod, drop_mod)[2,'Pr(>Chisq)']
+
+	this_mod = 	modlist_site[i,'Vpd_mean'][[1]]
+	drop_mod = update(this_mod, .~.-model_data[, j])
+	pval2 = anova(this_mod, drop_mod)[2,'Pr(>Chisq)']
+
+	use_lty = c(1,6)[1+(c(pval1, pval2)>=0.05)]
+
+	curve(modline(x, i, 'Vpd_mean'), from=min(use_data$Vpd_mean), to = max(use_data$Vpd_mean), add=T, lwd=4, lty=use_lty[1])
+	curve(modline_site(x, i, 'Vpd_mean', 2013), from=min(subset(use_data, Year==2013)$Vpd_mean), to = max(subset(use_data, Year==2013)$Vpd_mean),
+		add=T, lwd=3, col='grey30')
+	curve(modline_site(x, i, 'Vpd_mean', 2013), from=min(subset(use_data, Year==2013)$Vpd_mean), to = max(subset(use_data, Year==2013)$Vpd_mean),
+		add=T, lwd=2, col=use_col[1], lty=use_lty[2])
+	curve(modline_site(x, i, 'Vpd_mean', 2014), from=min(subset(use_data, Year==2014)$Vpd_mean), to = max(subset(use_data, Year==2014)$Vpd_mean),
+		add=T, lwd=3, col='grey30')
+	curve(modline_site(x, i, 'Vpd_mean', 2014), from=min(subset(use_data, Year==2014)$Vpd_mean), to = max(subset(use_data, Year==2014)$Vpd_mean),
+		add=T, lwd=2, col=use_col[2], lty=use_lty[2])
+
+	axis(1, at=5:8, labels=(5:8)*100)
+	axis(2, las=1)
+	box()
+
+}
+dev.off()
+
+# Compare water capacity
+svg('./Analysis/Figures/compare site effects vpd_mean compare water capacity.svg', height=4.5, width=5)
+par(mfrow=c(2,2))
+par(mar=c(2,4.4,1,1))
+par(lend=2)
+for(i in c('Water_capacity','WHC','STA','STM')){
 
 	this_unit = parse(text=traitnames[i,'units'])
 	this_traitname = parse(text=traitnames[i,'exprName'])
@@ -1384,6 +1497,8 @@ ISV_traits_gen = SA_traits - FA_traits_gen
 
 # Save trait means
 #save(SA_traits, FA_traits, ISV_traits, FA_traits_gen, ISV_traits_gen, file='./Analysis/sample mean traits no Usnea.RData')
+#save(SA_traits, FA_traits, ISV_traits, FA_traits_gen, ISV_traits_gen, file='./Analysis/sample mean traits with WHC STM.RData')
+
 
 # Load previously saved matrices of sample-mean traits
 load('./Analysis/sample mean traits no Usnea.RData')
@@ -1559,9 +1674,11 @@ aovSS_melt = melt(aovSS_array[,,c('Interspecific','Intraspecific','Total'),c('Va
 aovSS_tab = cast(aovSS_melt, Trait+Predictor~Component+Statistic)
 
 write.csv(aovSS_tab, './Analysis/Figures/Environmental predictors of trait variation decomposition no Usnea.csv', row.names=F)
+write.csv(aovSS_tab, './Analysis/Figures/Environmental predictors of trait variation decomposition with WHC STM.csv', row.names=F)
 
 totSS_tab = cast(melt(aovSS_array[,'Light_high',c('Interspecific','Intraspecific','Total'),'Tot']), Trait~Component)
 write.csv(totSS_tab, './Analysis/Figures/Total SS trait decomposition no Usnea.csv', row.names=F)
+write.csv(totSS_tab, './Analysis/Figures/Total SS trait decomposition with WHC STM.csv', row.names=F)
 
 ## Each variable separately controlling for site
 aov_env_site = vector('list', length(use_traits)*length(env_vars))
@@ -1595,7 +1712,7 @@ aovSS_site_tab = rbind(aovSS_site_tab, site0_tab)
 aovSS_site_tab = aovSS_site_tab[order(aovSS_site_tab$Trait, factor(aovSS_site_tab$Predictor, levels=c('Site',env_vars))),c(1,2,5,3,4,8,6,7,11,9,10)]
 
 write.csv(aovSS_site_tab, './Analysis/Figures/Environmental predictors of trait variation decomposition control site.csv', row.names=F)
-
+write.csv(aovSS_site_tab, './Analysis/Figures/Environmental predictors of trait variation decomposition control site with WHC STM.csv', row.names=F)
 
 
 ## Direction of effects of each env var on each component
@@ -1691,20 +1808,19 @@ props = aovSS_best[c('Interspecific','Intraspecific','Total'),'Var',] / aovSS_be
 props_mat = cast(melt(props), Trait~Component)
 props_mat$Predictor = dimnames(aovSS_array)$Predictor[bestvars[as.character(props_mat$Trait)]]
 rownames(props_mat) = props_mat$Trait
-props_mat = props_mat[use_traits[7:1],]
 
 props_sig = aovSS_best[c('Interspecific','Intraspecific','Total'),'P',]
 props_sig_mat = cast(melt(props_sig), Trait~Component)
 props_sig_mat[,2:4] = props_sig_mat[,2:4] < 0.05
 rownames(props_sig_mat) = props_sig_mat$Trait
-props_sig_mat = props_sig_mat[use_traits[7:1],]
 
 effects_best = sapply(use_traits, function(i) effects_array[i,bestvars[i],], simplify='array')
 effsign = t(effects_best)>0
 effsign = effsign[as.character(props_mat$Trait),]
-effsign = effsign[use_traits[7:1],]
 
-plot_props = props_mat
+plot_props = props_mat[use_traits[7:1],]
+props_sig_mat = props_sig_mat[use_traits[7:1],]
+effsign = effsign[use_traits[7:1],]
 
 pdf('./Analysis/Figures/Sample mean trait variance explained by best env predictors site.pdf', height=2, width=7)
 
@@ -1749,6 +1865,54 @@ for(comp in c('Total','Intraspecific','Interspecific')){
 
 dev.off()
 
+# Compare water capacity
+wtraits = c('Water_capacity','WHC','STA','STM')
+plot_props = props_mat[wtraits,]
+props_sig_mat = props_sig_mat[wtraits,]
+effsign = effsign[wtraits,]
+
+pdf('./Analysis/Figures/Sample mean trait variance explained by best env predictors site compare water capacity.pdf', height=1.75, width=7)
+
+# Set up plot layout: 4 columns
+layout(matrix(1:4, nrow=1), widths=c(0.4, 0.2, 0.2, 0.2))
+par(oma=c(0,2,0,2))
+par(mar=c(3,0,3,0.5))
+plot.new()
+plot.window(ylim=c(0,nrow(plot_props)), xlim=c(0,1))
+
+# Add y-axis labels in 1st plot
+lab1 = parse(text=traitnames[as.character(plot_props$Trait),'exprName']) # Trait names
+lab2 = xvarnames_short[as.character(plot_props$Predictor)] # Predictors
+N = nrow(plot_props)
+yvals = (1:N)-0.5 # locations to put labels
+mtext('Predictor', 3, 0, adj=1, cex=0.8)
+axis(2, at=yvals, labels=lab2, las=1,
+	tick=F, col=0, pos=1.1)
+mtext('Trait', 3, 0, adj=0.4, cex=0.8)
+text(0.65, yvals, parse(text=lab1), pos=2, font=2)
+
+for(comp in c('Total','Intraspecific','Interspecific')){
+	# Set up plot window
+	plot.new()
+	plot.window(ylim=c(0,nrow(plot_props)), xlim=c(0,1))
+	
+	# Add lines dividing bars
+	abline(h=0:N, col='grey70',lty=3, lwd=.8, lend=2)
+	
+	# Add rectangles for variance explained
+	rect(0, 0:(N-1), plot_props[,comp], 1:N, col=barcols[props_sig_mat[,comp]+1], border=NA)
+	
+	# Add symbol for direction of effect
+	signtext = signsymbs[effsign[,comp]+1]
+	signtext[!props_sig_mat[,comp]] = NA
+	text(plot_props[,comp]+.1, yvals, signtext)
+
+	# Add x-axis and title
+	axis(1, line=0, las=2, srt=180)
+	mtext(comp, 3, 0, cex=.8)
+}
+
+dev.off()
 
 
 ################################################################################
