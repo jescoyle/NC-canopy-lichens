@@ -137,7 +137,7 @@ plot(WHC~STM, data=use_data, las=1, ylab=expression(WHC[A]), xlim=c(0,75), ylim=
 
 plot(Water_capacity ~ WHC, data=use_data)
 
-
+## Create data frame with data for models
 use_traits = c('Water_capacity','WHC','Thallus_thickness','STA','STM','Cortex_thickness','Rhizine_length','Tot_chl_DW','Chla2b')
 model_data = use_data[,c(use_traits, env_vars, 'Genus','SampID','Year')]
 
@@ -371,7 +371,7 @@ make_bp = function(x, br){
 	use_names = paste(breaks[1:(length(breaks)-1)], breaks[2:length(breaks)], sep=' - ')
 	
 	par(mar=c(6,4,2,1))
-	barplot(t(xtable), beside=T, las=2, ylim=c(0,max(xtable)*1.1), names.arg=use_names, ylab='# Samples', col=c('white','grey50'))
+	barplot(t(xtable), beside=T, las=2, ylim=c(0,max(xtable)*1.1), names.arg=use_names, ylab='Number of Samples', col=c('white','grey50'))
 	#mtext(xvarnames[x], 3, 0)
 }
 
@@ -514,10 +514,10 @@ use_traits = c('Water_capacity','WHC','Thallus_thickness','STA','STM','Cortex_th
 traitnames = traitnames[order(traitnames$type),]
 
 # Numeric traits
-pdf('./Analysis/Figures/trait distributions by genus boxplot.pdf', height=5, width=4)
+pdf('./Analysis/Figures/trait distributions by genus boxplot.pdf', height=5, width=3)
 for( i in use_traits) {
-	
-	par(mar=c(8,5,1,3))
+
+	par(mar=c(8,1.5,1,3.5))
 	meds = tapply(use_data[,i], use_data$Genus, median, na.rm=T)
 	plotorder = names(meds)[order(meds)]
 	
@@ -525,10 +525,17 @@ for( i in use_traits) {
 	plotlabel2 = paste('(',traitnames[i,'units'],')', sep='')
 	ylab = ifelse(plotlabel2=='()', parse(text=plotlabel1), parse(text=paste(plotlabel1, plotlabel2, sep='~~')))
 	
-	boxplot(use_data[,i]~factor(use_data$Genus, levels=plotorder), 
-		las=3, ylab=ylab, 
+	boxplot(use_data[,i]~factor(use_data$Genus, levels=plotorder),
+		las=3, ylab='', axes=F,
 		lwd=1, pt.lwd=1, varwidth=T)
-	axis(4)
+	
+	axis(1, at=1:length(plotorder), labels=plotorder, las=2, line=0)
+	axis(4, line=0)
+	mtext(ylab, 4, 2.5)
+	
+	abline(v=par('usr')[2])
+	abline(h=par('usr')[3])
+	
 	
 	# Kruskal-Wallis Test
 	kwtest = kruskal.test(use_data[,i], factor(use_data$Genus))
@@ -537,7 +544,8 @@ for( i in use_traits) {
 
 	usr = par('usr')
 	this_text = substitute(Chi^2==c~~P==p, list(c = format(chi2, digits=3), p = format(pval, scientific=T, digits=2)))
-	text(usr[1], usr[4], this_text, srt=90, adj=c(1.1,1.1))
+	#text(usr[1], usr[4], this_text, srt=90, adj=c(1.1,1.1))
+	mtext(this_text, 2, 0, adj=1)
 
 	# Find groups that are different
 	#this_diff = diff_pairs[[i]]
@@ -570,10 +578,10 @@ diff_pairs_parm = sapply(use_traits, function(x){
 	names(which(apply(DTK_tests_parm[[x]][,2:3], 1, prod)>0))
 })
 
-pdf('./Analysis/Figures/trait distributions by Parmotrema species boxplot.pdf', height=5.5, width=4)
+pdf('./Analysis/Figures/trait distributions by Parmotrema species boxplot.pdf', height=5.5, width=3)
 for( i in use_traits) {
 	
-	par(mar=c(5,5,1,3))
+	par(mar=c(5,1.5,1,3.5))
 	meds = tapply(parm_data[,i], parm_data$TaxonID, median, na.rm=T)
 	plotorder = names(meds)[order(meds)]
 	
@@ -582,10 +590,15 @@ for( i in use_traits) {
 	ylab = ifelse(plotlabel2=='()', parse(text=plotlabel1), parse(text=paste(plotlabel1, plotlabel2, sep='~~')))
 	
 	boxplot(parm_data[,i]~factor(parm_data$TaxonID, levels=plotorder), 
-		las=3, ylab=ylab, 
+		las=3, ylab='', axes=F, 
 		lwd=1, pt.lwd=1, varwidth=T)
-	axis(4)
+	axis(1, at=1:length(plotorder), labels=plotorder, las=2, line=0)
+	axis(4, line=0)
+	mtext(ylab, 4, 2.5)
 	
+	abline(v=par('usr')[2])
+	abline(h=par('usr')[3])
+
 	# Kruskal-Wallis Test
 	kwtest = kruskal.test(parm_data[,i], factor(parm_data$TaxonID))
 	chi2 = kwtest$statistic
@@ -593,7 +606,8 @@ for( i in use_traits) {
 
 	usr = par('usr')
 	this_text = substitute(Chi^2==c~~P==p, list(c = format(chi2, digits=3), p = format(pval, scientific=T, digits=2)))
-	text(usr[1], usr[4], this_text, srt=90, adj=c(1.1,1.1))
+	#text(usr[1], usr[4], this_text, srt=90, adj=c(1.1,1.1))
+	mtext(this_text, 2, 0, adj=1)
 
 }
 dev.off()
@@ -865,6 +879,7 @@ dev.off()
 
 }
 
+## Manuscript Figure 2
 # Plot Variance components figure used in manuscript (Fig 2): different scales for each trait
 plot_traits = c('Chla2b','Tot_chl_DW','Rhizine_length','Cortex_thickness','STA','Thallus_thickness','Water_capacity')
 
@@ -908,6 +923,49 @@ if(j==colnames(ests)[1]) mtext(expression(paste('Estimated Variance ',(sigma^2))
 dev.off()
 
 }
+
+# Make SVG version for editing in final manuscript version
+i='Vpd_mean'
+
+varcomp = parm_ests[plot_traits, i,c('sigma.res','sigma.samp','sigma.env','sigma.genus'),]
+ests = varcomp[,,'est']
+varcomp[ests==0] = NA # removes data for variance components that could not be estimated
+ests = t(varcomp[,,'est'])
+low95 = t(varcomp[,,'low95'])
+up95 = t(varcomp[,,'up95'])
+yvals = (1:nrow(ests))-0.5
+
+#svg('./Paper/Oikos/Revision 2/Fig 2.svg', height=7, width=3.149)
+svg('./Paper/Oikos/Revision 2/SI/Fig S7.svg', height=7, width=3.149) # Run with no Usnea models
+layout(matrix((2*ncol(ests)):1, nrow=ncol(ests), byrow=T)[,2:1], widths=c(0.3, 0.7))
+par(oma=c(2,0,0,2))
+par(mar=c(2,0,2,0))
+
+for(j in colnames(ests)){
+plot.new()
+plot.window(ylim=c(-.5,nrow(ests)), xlim=c(0,1))
+axis(2, at=yvals, labels=c('Residual','Sample','Environment','Genus'), las=1,
+	tick=F, line=0, col=0, pos=1.05)
+
+this_letter = paste0('(',letters[8-which(colnames(ests)==j)],')')
+trait_text = traitnames[j,'exprName']
+mtext(this_letter, 3, 0, adj=0, cex=.7)
+mtext(parse(text=trait_text), 3, 0, adj=0.3, cex=.7)
+
+
+plot.new()
+plot.window(ylim=c(-.5,nrow(ests)), xlim=c(0,max(up95[,j], na.rm=T)))
+abline(h=yvals, col='grey50', lty=3)
+abline(h=-.5)
+segments(low95[,j], yvals, up95[,j], yvals, lend=1, lwd=3)
+points(ests[,j], yvals, pch=21, bg='white',cex=1.5)
+axis(1, pos=-.5, las=1)
+if(j==colnames(ests)[1]) mtext(expression(paste('Estimated Variance ',(sigma^2))), 1, 2.5, cex=.8)
+}
+
+dev.off()
+
+
 
 # Compare water capacity measured
 wtraits = c('Water_capacity','WHC')#,'STA','STM')
@@ -1021,12 +1079,12 @@ for(j in env_vars){
 
 # Save models
 #save(modlist_site, parm_ests_site, genus_ests_site, file='./Analysis/REML single variable FT models with site effects.RData')
-save(modlist_site, parm_ests_site, genus_ests_site, file='./Analysis/REML single variable FT models with site effects with WHC STM.RData')
+#save(modlist_site, parm_ests_site, genus_ests_site, file='./Analysis/REML single variable FT models with site effects with WHC STM.RData')
 
 
 # Load previously saved models
 #load('./Analysis/REML single variable FT models with site effects.RData') # Has not been updated since removing Chla2b > 5
-#load('./Analysis/REML single variable FT models with site effects with WHC STM.RData')
+load('./Analysis/REML single variable FT models with site effects with WHC STM.RData')
 
 # Compare site effects across models
 parm_ests_site[,,'site',]
@@ -1084,9 +1142,10 @@ names(xfact) = env_vars
 envunits = c('klx','%','degree*C','Pa','%')
 names(envunits) = env_vars
 
-pdf('./Analysis/Figures/REML single variable model effects compare site by env.pdf', height=7, width=7)
+svg('./Analysis/Figures/REML single variable model effects compare site by env.svg', height=7, width=7)
 layout(matrix(1:(length(env_vars)+1), ncol=2))
-par(mar=c(4,8,1.5,.5))
+par(mar=c(4,8,2.5,.5))
+
 par(lend=1)
 
 for(j in env_vars){
@@ -1094,6 +1153,7 @@ for(j in env_vars){
 	this_data = parm_ests[trait_order,j,'b1',]*xfact[j]
 	this_site = parm_ests_site[trait_order,j,'b1',]*xfact[j]
 	xrange = range(c(this_data, this_site))
+	N = nrow(this_data)
 
 	plot.new()
 	plot.window(xlim=xrange, ylim=c(0,N))
@@ -1107,18 +1167,16 @@ for(j in env_vars){
 		this_site[, 'up95'], (1:N)-ynudge, lwd=2, col='grey50')
 	points(this_site[,'est'], (1:N)-ynudge, pch=21, col='grey50', bg='white')
 	
-	axis(1)
-	axis(2, at=1:N, labels=parse(text=traitnames[trait_order,'exprName']), las=1)
-	mtext(parse(text=traitnames[i,'exprName']), 3, 0, cex=0.8)
-
+	axis(1, line=0)
+	axis(2, at=1:N, labels=parse(text=traitnames[trait_order,'exprName']), las=1, line=0)
+	abline(h=par('usr')[3], lwd=2)	
+	abline(v=par('usr')[1], lwd=2)
+	mtext('Estimated Effect', 1, 2.5, cex=0.8)
 	
-	this_xname = paste('Effect of',xvarnames_short[j])
-	#this_unit = parse(text=envunits[j])
-	#this_lab = paste(this_xname,'~~(',this_unit,')', sep='')
-	#this_lab = bquote(.(this_xname)~~(.(this_unit))) # Can't get this to work
-
-	mtext(this_xname, 1, 2.5, cex=0.8)
-	box()
+	this_xname = xvarnames_short[j]
+	this_letter = paste0('(',letters[which(env_vars==j)],')')
+	mtext(paste(this_letter, this_xname), 3, 1, adj=-.65, cex=.8)
+	
 }
 
 dev.off()
@@ -1325,9 +1383,11 @@ dev.off()
 
 
 # Only plot the two that differ: WHC ~ Mean light and CHLTOT ~ Mean light
+## SI Figure S3
 pdf('./Analysis/Figures/trait-env relationship by genus only sig.pdf', height=3, width=6)
+par(lend=1)
 layout(t(matrix(1:3)), widths=c(0.4,0.4,0.2))
-par(mar=c(4,4,1,1))
+par(mar=c(4,4.3,1.5,1))
 for(i in c('Water_capacity', 'Tot_chl_DW')){
 
 	plotlabel1 = traitnames[i,'exprName']
@@ -1335,9 +1395,17 @@ for(i in c('Water_capacity', 'Tot_chl_DW')){
 	ylab = ifelse(plotlabel2=='()', parse(text=plotlabel1), parse(text=paste(plotlabel1, plotlabel2, sep='~~')))
 	
 
-	plot(use_data[,c('Light_mean',i)], las=1, xlab=xvarnames['Light_mean'], ylab=ylab,
-		pch=21, bg=use_col[factor(use_data$Genus)], cex=.8)
-	
+	plot(use_data[,c('Light_mean',i)], las=1, xlab='Mean Light Intensity (lx)', ylab='',
+		pch=21, bg=use_col[factor(use_data$Genus)], cex=.8, axes=F)
+	abline(h=par('usr')[3], lwd=2.5)
+	abline(v=par('usr')[1], lwd=2.5)
+	axis(1, line=0)
+	axis(2, las=1, line=0)
+	mtext(ylab, 2, 2.5, cex=.7)
+
+	letter_label = ifelse(i=='Water_capacity', '(a)', '(b)')
+	mtext(letter_label, 3, 0.1, adj=-.32, cex=.8)
+
 	for(g in genera){
 		this_data = subset(model_data, Genus==g)
 		xvar = this_data[,'Light_mean']
