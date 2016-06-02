@@ -690,7 +690,7 @@ library(lme4)
 library(LMERConvenienceFunctions)
 library(boot) # for boot.ci
 
-use_traits = c('Chla2b','Tot_chl_DW') #c('Water_capacity','Thallus_thickness','STA','Cortex_thickness','Rhizine_length','Tot_chl_DW','Chla2b','WHC','STM')
+use_traits = c('Water_capacity','Thallus_thickness','STA','Cortex_thickness','Rhizine_length','Tot_chl_DW','Chla2b','WHC','STM')
 
 # Create objects for storing models
 modlist = vector('list', length(use_traits)*length(env_vars))
@@ -1056,7 +1056,7 @@ parm_ests_site = array(NA, dim=c(length(use_traits), length(env_vars), 6, 3),
 genus_ests_site = array(NA, dim=c(length(use_traits), length(env_vars), length(unique(model_data$Genus)), 3), 
 	dimnames = list(use_traits, env_vars, levels(factor(model_data$Genus)), c('est','low95','up95')))
 
-use_traits = c('Chla2b','Tot_chl_DW')
+use_traits = c('Water_capacity','Thallus_thickness','STA','Cortex_thickness','Rhizine_length','Tot_chl_DW','Chla2b','WHC','STM')
 
 for(i in use_traits){
 for(j in env_vars){
@@ -1225,7 +1225,7 @@ for(i in c('Water_capacity','STA','Rhizine_length','Cortex_thickness','Tot_chl_D
 	# Significance of fixed effects slopes
 	this_mod = modlist[i,'Vpd_mean'][[1]]
 	drop_mod = update(this_mod, .~.-model_data[, j])
-	pval1 = anova(this_mod, drop_mod)[2,'Pr(>Chisq)']
+	pval1 = anova(this_mod, drop_mod)i='[2,'Pr(>Chisq)']
 
 	this_mod = 	modlist_site[i,'Vpd_mean'][[1]]
 	drop_mod = update(this_mod, .~.-model_data[, j])
